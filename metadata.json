@@ -1,0 +1,6 @@
+{
+  "name": "TokenCare - Web3 Token & Donation Hub",
+  "description": "Add, verify, and inspect ERC-20 token contracts for Web3 donations, complete with automated RPC honeypot analysis, token supply metrics, and reward distribution.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

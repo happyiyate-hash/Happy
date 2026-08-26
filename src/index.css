@@ -1,0 +1,58 @@
+@import "tailwindcss";
+
+:root {
+  --sat: env(safe-area-inset-top, 0px);
+  --sab: env(safe-area-inset-bottom, 0px);
+}
+
+/* Hide scrollbars globally across all browsers while retaining full scroll functionality */
+*, html, body {
+  scrollbar-width: none !important; /* Firefox */
+  -ms-overflow-style: none !important; /* IE and Edge */
+}
+
+*::-webkit-scrollbar,
+html::-webkit-scrollbar,
+body::-webkit-scrollbar {
+  display: none !important; /* Chrome, Safari, Opera */
+  width: 0 !important;
+  height: 0 !important;
+}
+
+html {
+  background-color: #030710;
+  color-scheme: dark;
+  transition: background-color 0.2s ease;
+}
+
+body {
+  background-color: #030710;
+  color: #f4f4f5;
+  overscroll-behavior-y: none;
+  -webkit-tap-highlight-color: transparent;
+  transition: background-color 0.2s ease;
+}
+
+/* Safe area padding helper utilities for PWA navigation blending */
+.pt-safe-nav {
+  padding-top: calc(0.5rem + env(safe-area-inset-top, 0px));
+}
+
+.pb-safe-nav {
+  padding-bottom: calc(0.625rem + env(safe-area-inset-bottom, 0px));
+}
+
+@keyframes subtleBellTilt {
+  0% { transform: translateY(0) rotate(0deg); }
+  15% { transform: translateY(-2px) rotate(-10deg); }
+  30% { transform: translateY(-2px) rotate(10deg); }
+  45% { transform: translateY(-1px) rotate(-5deg); }
+  60% { transform: translateY(-1px) rotate(5deg); }
+  75% { transform: translateY(0) rotate(0deg); }
+  100% { transform: translateY(0) rotate(0deg); }
+}
+
+.animate-bell-shake {
+  animation: subtleBellTilt 1.2s ease-in-out 3;
+}
+

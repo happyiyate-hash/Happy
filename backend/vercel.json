@@ -1,0 +1,17 @@
+{
+  "version": 2,
+  "builds": [
+    {
+      "src": "api/*.py",
+      "use": "@vercel/python"
+    }
+  ],
+  "routes": [
+    { "src": "/api/health", "dest": "api/health.py" },
+    { "src": "/api/token/details", "dest": "api/token_details.py" },
+    { "src": "/api/token/price", "dest": "api/token_price.py" },
+    { "src": "/api/tokens/prices", "dest": "api/batch_prices.py" },
+    { "src": "/api/token/chart", "dest": "api/token_chart.py" },
+    { "src": "/api", "dest": "api/index.py" }
+  ]
+}

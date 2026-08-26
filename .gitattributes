@@ -1,0 +1,13 @@
+# Ensure binary files are never modified by line-ending conversion
+*.jar binary
+*.aar binary
+*.apk binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.ico binary
+
+# Unix shell scripts must always use LF
+gradlew text eol=lf
+*.sh text eol=lf

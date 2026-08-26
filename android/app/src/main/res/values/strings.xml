@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">TokenCare</string>
+    <string name="title_activity_main">TokenCare</string>
+    <string name="package_name">io.tokencare.app</string>
+    <string name="custom_url_scheme">io.tokencare.app</string>
+</resources>
