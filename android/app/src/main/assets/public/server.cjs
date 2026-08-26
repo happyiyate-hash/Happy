@@ -380,7 +380,7 @@ async function startServer() {
         }
         const normalizedToken = {
           name: dexData?.baseToken?.name || "Example Token",
-          symbol: String(dexData?.baseToken?.symbol || "EXT").toUpperCase(),
+          symbol: (dexData?.baseToken?.symbol || "EXT").toUpperCase(),
           chain,
           chainId: chain === "ethereum" ? 1 : chain === "polygon" ? 137 : chain === "base" ? 8453 : 1,
           contractAddress: contractAddress || "0x0000000000000000000000000000000000000000",
@@ -487,7 +487,7 @@ async function startServer() {
             contractAddress: contractAddress || "0x0000000000000000000000000000000000000000",
             inspection: {
               name: dexData?.baseToken?.name || "Example Token",
-              symbol: String(dexData?.baseToken?.symbol || "EXT").toUpperCase(),
+              symbol: (dexData?.baseToken?.symbol || "EXT").toUpperCase(),
               verified: true,
               safetyScore: 95,
               rating: "SAFE",

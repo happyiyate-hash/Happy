@@ -6,12 +6,3 @@ coverage/
 *.log
 .env*
 !.env.example
-
-# Capacitor native branding is generated from the two source files in resources/.
-# Do not commit generated Android launcher/splash image copies.
-android/app/src/main/res/drawable/splash.png
-android/app/src/main/res/drawable-land-*/splash.png
-android/app/src/main/res/drawable-port-*/splash.png
-android/app/src/main/res/mipmap-*/ic_launcher.png
-android/app/src/main/res/mipmap-*/ic_launcher_round.png
-android/app/src/main/res/mipmap-*/ic_launcher_foreground.png

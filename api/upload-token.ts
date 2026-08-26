@@ -1,0 +1,25 @@
+import handler from '../backend/vercel-handler';
+
+export default async function uploadTokenApi(req: any, res: any) {
+  if (req.method === 'OPTIONS') {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,POST');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-API-Key');
+    return res.status(200).end();
+  }
+
+  let body = req.body || req.query || {};
+  if (typeof body === 'string') {
+    try {
+      body = JSON.parse(body);
+    } catch {}
+  }
+  body = body || {};
+  if (!body.action) {
+    body.action = 'saveToken';
+  }
+  req.body = body;
+
+  return handler(req, res);
+}
+
