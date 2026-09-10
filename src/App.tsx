@@ -20,10 +20,11 @@ import {
 import { ChainId, SubmittedToken, UserRewardWallet, LogoStatus } from './types';
 import { SUPPORTED_CHAINS, RAW_EVM_CHAINS, REWARD_RATE_USD, getChainInfo, normalizeChainKey, isEvmChain, validateTokenIdentifier } from './constants/chains';
 import { fetchERC20MetadataFromBlockchain, detectEVMChainForContractAddress } from './services/ethers';
-import { fetchDexScreenerData, fetchCoinGeckoSupplyData, discoverToken } from './services/api';
+import { fetchDexScreenerData, fetchCoinGeckoSupplyData, discoverToken, lookupBlockchainForToken, uploadTokenToBackend, fetchNonEvmTokenMetadata } from './services/api';
 import { analyzeTokenSafety } from './services/security';
 import { verifyToken, VerificationReport } from './services/verificationEngine';
 import { verifyTokenLogo, LogoVerificationReport, downloadAndPrepareImageSource } from './services/logoVerificationEngine';
+import { resolveTokenLogoWithFallback } from './services/tokenLogoResolver';
 import { getChainLogoUrl } from './components/ChainSelectorModal';
 import {
   getSubmittedTokens,
@@ -42,23 +43,35 @@ import { LogoVerificationCard } from './components/LogoVerificationCard';
 import { DonationSettingsCard } from './components/DonationSettingsCard';
 import { TokenHuntCard } from './components/TokenHuntCard';
 import { HowItWorksModal } from './components/HowItWorksModal';
-import { RewardWalletModal } from './components/RewardWalletModal';
 import { WalletConnectModal } from './components/WalletConnectModal';
 import { DashboardOverview } from './components/DashboardOverview';
 import { ExploreView } from './components/ExploreView';
 import { SettingsView } from './components/SettingsView';
+import { DesktopSettingsView } from './components/DesktopSettingsView';
 import { WithdrawalView } from './components/WithdrawalView';
+import { DesktopWithdrawalView } from './components/DesktopWithdrawalView';
+import { MySavedTokensView } from './components/MySavedTokensView';
+import { FloatingSavedTokensBadge } from './components/FloatingSavedTokensBadge';
+import {
+  getLocalSavedTokens,
+  addLocalSavedToken,
+  submittedTokenToSavedItem,
+  MAX_SAVED_TOKENS,
+} from './services/tokenBatchVerificationService';
 import { NotificationCenterView } from './components/NotificationCenterView';
+import { DesktopNotificationPopover } from './components/DesktopNotificationPopover';
 import { MfaManagementView } from './components/MfaManagementView';
-import { ApiConsoleModal } from './components/ApiConsoleModal';
 import { HelpCenterView } from './components/HelpCenterView';
 import { ContactSupportView } from './components/ContactSupportView';
 import { SupportLiveChatView } from './components/SupportLiveChatView';
 import { TermsAndPrivacyView } from './components/TermsAndPrivacyView';
-import { DeveloperView } from './components/DeveloperView';
 
 import { uploadTokensToWorker, getTokenByAddressFromWorker } from './services/workerApi';
-import { initGlobalExploreDirectory } from './services/exploreDirectory';
+import { initGlobalExploreDirectory, normalizeWorkerToken } from './services/exploreDirectory';
+import {
+  fetchTokensByUserFromBackend,
+  saveTokensToBackend,
+} from './services/vercelTokenBackend';
 import {
   getSupabase,
   SupabaseUserProfile,
@@ -91,12 +104,17 @@ import { ToastNotification } from './components/ToastNotification';
 import { ConnectionStatusToast } from './components/ConnectionStatusToast';
 import {
   getCachedAppData,
+  getLatestCachedAppData,
+  getSyncCachedAppData,
   setCachedAppData,
   clearCachedAppData,
+  saveActiveSessionUser,
+  getActiveSessionUser,
+  clearActiveSessionUser,
   SessionStatus,
   CachedAppData,
 } from './services/appCache';
-import { Loader2, Smartphone, Monitor } from 'lucide-react';
+import { Loader2 } from 'lucide-react';
 
 // Persistent network transition tracker outside component lifecycle
 let isGenuinelyOffline = typeof navigator !== 'undefined' ? !navigator.onLine : false;
@@ -104,22 +122,53 @@ let isGenuinelyOffline = typeof navigator !== 'undefined' ? !navigator.onLine : 
 export default function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [selectedChain, setSelectedChain] = useState<ChainId>('137'); // Polygon PoS default
-  const [tokens, setTokens] = useState<SubmittedToken[]>([]);
-  const [wallet, setWallet] = useState<UserRewardWallet>(getRewardWallet());
+
+  // Synchronously hydrate initial user session and data from storage for instant offline render & zero-flicker
+  const [currentUser, setCurrentUser] = useState<any>(() => getActiveSessionUser());
+  const [userProfile, setUserProfile] = useState<SupabaseUserProfile | null>(() => {
+    const active = getActiveSessionUser();
+    if (active?.id) {
+      const cached = getSyncCachedAppData(active.id) || getLatestCachedAppData();
+      return cached?.userProfile || null;
+    }
+    return null;
+  });
+  const [tokens, setTokens] = useState<SubmittedToken[]>(() => {
+    const active = getActiveSessionUser();
+    if (active?.id) {
+      const cached = getSyncCachedAppData(active.id) || getLatestCachedAppData();
+      if (cached?.tokens && cached.tokens.length > 0) return cached.tokens;
+      const t = getSubmittedTokens(active.id);
+      if (t && t.length > 0) return t;
+    }
+    return [];
+  });
+  const [wallet, setWallet] = useState<UserRewardWallet>(() => {
+    const active = getActiveSessionUser();
+    const activeId = active?.id;
+    if (activeId) {
+      const cached = getSyncCachedAppData(activeId) || getLatestCachedAppData();
+      if (cached?.wallet) return cached.wallet;
+    }
+    return getRewardWallet(activeId);
+  });
   const [apiKeys, setApiKeys] = useState<ApiKeyConfig>(getStoredApiKeys());
 
-  // View Mode: 'desktop' vs 'mobile' (auto-detects mobile screens)
-  const [viewMode, setViewMode] = useState<'desktop' | 'mobile'>(
-    typeof window !== 'undefined' && window.innerWidth < 768 ? 'mobile' : 'desktop'
-  );
+  // Automatic View Mode: strictly adapts to viewport width (<768px for mobile, >=768px for desktop)
+  const [isMobile, setIsMobile] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      return window.innerWidth < 768;
+    }
+    return false;
+  });
 
   // Supabase Auth & Profile state
   const [authChecking, setAuthChecking] = useState(true);
-  const [currentUser, setCurrentUser] = useState<any>(null);
-  const [userProfile, setUserProfile] = useState<SupabaseUserProfile | null>(null);
 
   // Offline-first & Cache-first state architecture
-  const [sessionStatus, setSessionStatus] = useState<SessionStatus>('authenticated_local');
+  const [sessionStatus, setSessionStatus] = useState<SessionStatus>(() =>
+    typeof navigator !== 'undefined' && !navigator.onLine ? 'offline' : 'authenticated_local'
+  );
   const [isOnline, setIsOnline] = useState<boolean>(
     typeof navigator !== 'undefined' ? navigator.onLine : true
   );
@@ -138,9 +187,7 @@ export default function App() {
 
   // Modals
   const [isHowItWorksOpen, setIsHowItWorksOpen] = useState(false);
-  const [isRewardModalOpen, setIsRewardModalOpen] = useState(false);
   const [isWalletModalOpen, setIsWalletModalOpen] = useState(false);
-  const [isApiConsoleOpen, setIsApiConsoleOpen] = useState(false);
 
   // Form State
   const [currentStep, setCurrentStep] = useState(1);
@@ -155,7 +202,6 @@ export default function App() {
   const [logoStatus, setLogoStatus] = useState<LogoStatus>('checking');
   const [isSavingToken, setIsSavingToken] = useState(false);
   const [saveSuccessMessage, setSaveSuccessMessage] = useState<string | null>(null);
-  const [isTokenSavedInAccount, setIsTokenSavedInAccount] = useState<boolean>(false);
 
   // Progressive Verification Flow States
   const [isVerifying, setIsVerifying] = useState(false);
@@ -164,6 +210,25 @@ export default function App() {
 
   // Notification state
   const [unreadNotificationCount, setUnreadNotificationCount] = useState<number>(0);
+  const [isDesktopNotificationOpen, setIsDesktopNotificationOpen] = useState<boolean>(false);
+
+  // Saved tokens count for floating badge in desktop view
+  const [savedTokensCount, setSavedTokensCount] = useState<number>(() => getLocalSavedTokens(currentUser?.id).length);
+
+  useEffect(() => {
+    const updateSavedCount = () => {
+      setSavedTokensCount(getLocalSavedTokens(currentUser?.id).length);
+    };
+
+    updateSavedCount();
+    window.addEventListener('tokencare_saved_tokens_updated', updateSavedCount);
+    window.addEventListener('storage', updateSavedCount);
+
+    return () => {
+      window.removeEventListener('tokencare_saved_tokens_updated', updateSavedCount);
+      window.removeEventListener('storage', updateSavedCount);
+    };
+  }, [currentUser?.id]);
 
   // Load user unread notification count
   const loadUnreadCount = async (userId: string) => {
@@ -194,18 +259,62 @@ export default function App() {
     };
   }, [currentUser?.id]);
 
-  // Load User Profile and Tokens from Supabase
+  // Load User Profile and Tokens from Vercel Backend gateway (getTokensByUser) & local storage
   const loadUserAndTokens = async (userId?: string, sessionUser?: any) => {
     if (!userId) {
       setTokens([]);
       return;
     }
-    // Load saved tokens from Supabase for this user
-    const supabaseTokens = await fetchTokensFromSupabase(userId);
-    if (supabaseTokens && supabaseTokens.length > 0) {
-      setTokens(supabaseTokens);
-    } else {
-      setTokens(getSubmittedTokens(userId));
+
+    // 1. Check local cache first for instantaneous offline render
+    const localTokens = getSubmittedTokens(userId);
+    if (localTokens && localTokens.length > 0) {
+      setTokens(localTokens);
+    }
+
+    // 2. Fetch user tokens from Vercel backend using action: getTokensByUser
+    try {
+      const rawUserTokens = await fetchTokensByUserFromBackend(userId);
+      if (rawUserTokens && Array.isArray(rawUserTokens) && rawUserTokens.length > 0) {
+        // Normalize returned token items directly into SubmittedToken list
+        const formattedTokens: SubmittedToken[] = rawUserTokens.map((t, idx) => {
+          const contractAddr = String(t.contractAddress || t.address || t.id || '').trim();
+          const chain = String(t.blockchain || t.chainId || 'polygon').trim().toLowerCase();
+          return normalizeWorkerToken(
+            {
+              ...t,
+              contractAddress: contractAddr,
+              address: contractAddr,
+              blockchain: chain,
+            },
+            idx
+          );
+        }).filter((t) => Boolean(t.address));
+
+        if (formattedTokens.length > 0) {
+          setTokens(formattedTokens);
+          saveSubmittedTokens(formattedTokens, userId);
+        } else if (localTokens && localTokens.length > 0) {
+          setTokens(localTokens);
+        }
+      } else {
+        // If empty from backend, fallback to Supabase or keep local
+        const supabaseTokens = await fetchTokensFromSupabase(userId).catch(() => []);
+        if (supabaseTokens && supabaseTokens.length > 0) {
+          setTokens(supabaseTokens);
+          saveSubmittedTokens(supabaseTokens, userId);
+        } else if (!localTokens || localTokens.length === 0) {
+          setTokens([]);
+        }
+      }
+    } catch (e) {
+      console.warn('[UserTokens] Vercel Backend getTokensByUser note, using local cache:', e);
+      const supabaseTokens = await fetchTokensFromSupabase(userId).catch(() => []);
+      if (supabaseTokens && supabaseTokens.length > 0) {
+        setTokens(supabaseTokens);
+      } else if (localTokens && localTokens.length > 0) {
+        setTokens(localTokens);
+      }
     }
 
     loadUserProfile(userId, sessionUser);
@@ -229,13 +338,26 @@ export default function App() {
       const {
         data: { session },
         error: sessionError,
-      } = await supabase.auth.getSession();
+      } = await supabase.auth.getSession().catch((err) => ({
+        data: { session: null },
+        error: err,
+      }));
 
       if (sessionError || !session?.user) {
+        // If there's an active local user in storage, NEVER log them out due to intermittent network or session glitch
+        const activeLocalUser = getActiveSessionUser();
+        if (activeLocalUser?.id) {
+          console.warn('[BackgroundSync] Server session check note - maintaining local offline state:', sessionError?.message);
+          setSessionStatus('offline');
+          setIsSyncing(false);
+          return;
+        }
+
         if (!hasCache || sessionError?.message?.includes('invalid') || sessionError?.message?.includes('expired')) {
           console.warn('[BackgroundSync] Session expired or revoked on server.');
           const oldUserId = currentUserRef.current?.id;
           setSessionStatus('expired_revoked');
+          clearActiveSessionUser(oldUserId);
           setCurrentUser(null);
           setUserProfile(null);
           setTokens([]);
@@ -254,13 +376,14 @@ export default function App() {
         }
       }
 
-      // Check MFA AAL2 requirement on server
+      // Check MFA AAL2 requirement on server (only when online)
       try {
         const assurance = await getMFAAssuranceLevel();
         if (assurance.requiresMFA) {
           console.log('[BackgroundSync] Session requires AAL2 MFA on server.');
           const oldUserId = currentUserRef.current?.id;
           setSessionStatus('expired_revoked');
+          clearActiveSessionUser(oldUserId);
           setCurrentUser(null);
           setUserProfile(null);
           setTokens([]);
@@ -277,13 +400,14 @@ export default function App() {
       }
 
       const serverUser = session.user;
+      saveActiveSessionUser(serverUser);
       setCurrentUser(serverUser);
       const userId = serverUser.id;
 
       // Concurrently fetch fresh user profile, tokens, and unread notification count
-      const [freshProfile, freshTokens, freshUnread] = await Promise.all([
+      const [freshProfile, rawBackendTokens, freshUnread] = await Promise.all([
         getUserProfile(userId, serverUser).catch(() => null),
-        fetchTokensFromSupabase(userId).catch(() => null),
+        fetchTokensByUserFromBackend(userId).catch(() => null),
         fetchUnreadNotificationCount(userId).catch(() => 0),
       ]);
 
@@ -294,9 +418,27 @@ export default function App() {
       }
 
       let finalTokens = tokens;
-      if (freshTokens && Array.isArray(freshTokens)) {
-        finalTokens = freshTokens;
-        setTokens(freshTokens);
+      if (rawBackendTokens && Array.isArray(rawBackendTokens) && rawBackendTokens.length > 0) {
+        finalTokens = rawBackendTokens
+          .map((t, idx) => {
+            const contractAddr = String(t.contractAddress || t.address || t.id || '').trim();
+            const chain = String(t.blockchain || t.chainId || 'polygon').trim().toLowerCase();
+            return normalizeWorkerToken(
+              {
+                ...t,
+                contractAddress: contractAddr,
+                address: contractAddr,
+                blockchain: chain,
+              },
+              idx
+            );
+          })
+          .filter((t) => Boolean(t.address));
+
+        if (finalTokens.length > 0) {
+          setTokens(finalTokens);
+          saveSubmittedTokens(finalTokens, userId);
+        }
       }
 
       setUnreadNotificationCount(freshUnread);
@@ -319,7 +461,7 @@ export default function App() {
       setLastSyncTimestamp(syncTime);
       setSessionStatus('online_validated');
 
-      // Update local IndexedDB cache with fresh payload
+      // Update local IndexedDB and localStorage cache with fresh payload
       await setCachedAppData({
         userId: serverUser.id,
         userEmail: serverUser.email || '',
@@ -345,43 +487,97 @@ export default function App() {
 
     const initializeCacheAndSession = async () => {
       try {
+        // Step 1: Immediately restore from synchronous / IndexedDB local cache
+        const localActiveUser = getActiveSessionUser();
+        if (localActiveUser?.id) {
+          const cachedData = await getCachedAppData(localActiveUser.id);
+          if (cachedData) {
+            if (cachedData.userProfile) setUserProfile(cachedData.userProfile);
+            if (cachedData.tokens && cachedData.tokens.length > 0) setTokens(cachedData.tokens);
+            if (cachedData.wallet) setWallet(cachedData.wallet);
+            if (cachedData.unreadCount !== undefined) setUnreadNotificationCount(cachedData.unreadCount);
+            if (cachedData.lastSyncTimestamp) setLastSyncTimestamp(cachedData.lastSyncTimestamp);
+          } else {
+            const userTokens = getSubmittedTokens(localActiveUser.id);
+            if (userTokens && userTokens.length > 0) {
+              setTokens(userTokens);
+            }
+          }
+          setCurrentUser(localActiveUser);
+          setSessionStatus(
+            typeof navigator !== 'undefined' && navigator.onLine ? 'authenticated_local' : 'offline'
+          );
+        }
+
+        // Step 2: Check Supabase session
         const supabase = getSupabase();
         const {
           data: { session },
-        } = await supabase.auth.getSession();
+        } = await supabase.auth.getSession().catch(() => ({ data: { session: null } }));
 
         if (session?.user) {
           const activeUserId = session.user.id;
+          saveActiveSessionUser(session.user);
           setCurrentUser(session.user);
 
-          // Step 1: Read user-scoped cached session & dashboard state FIRST
           const cachedData = await getCachedAppData(activeUserId);
-
           if (cachedData && cachedData.userId === activeUserId) {
             if (cachedData.userProfile) setUserProfile(cachedData.userProfile);
             if (cachedData.tokens) setTokens(cachedData.tokens);
             if (cachedData.wallet) setWallet(cachedData.wallet);
             if (cachedData.unreadCount !== undefined) setUnreadNotificationCount(cachedData.unreadCount);
             if (cachedData.lastSyncTimestamp) setLastSyncTimestamp(cachedData.lastSyncTimestamp);
-          } else {
-            const userTokens = getSubmittedTokens(activeUserId);
-            if (userTokens && userTokens.length > 0) {
-              setTokens(userTokens);
-            }
           }
 
           const initialStatus: SessionStatus =
             typeof navigator !== 'undefined' && navigator.onLine ? 'authenticated_local' : 'offline';
           setSessionStatus(initialStatus);
 
-          await performBackgroundSync(session.user, true);
+          if (typeof navigator !== 'undefined' && navigator.onLine) {
+            await performBackgroundSync(session.user, true);
+          }
         } else {
-          setCurrentUser(null);
-          setUserProfile(null);
-          setTokens([]);
+          // If Supabase getSession returned null (e.g. offline or slow network)
+          const fallbackUser = getActiveSessionUser() || getLatestCachedAppData();
+          if (fallbackUser?.id || (fallbackUser as any)?.userId) {
+            const resolvedUser = fallbackUser.id
+              ? fallbackUser
+              : {
+                  id: (fallbackUser as any).userId,
+                  email: (fallbackUser as any).userEmail || '',
+                  user_metadata: (fallbackUser as any).userProfile
+                    ? {
+                        full_name: (fallbackUser as any).userProfile.display_name,
+                        username: (fallbackUser as any).userProfile.username,
+                        avatar_url: (fallbackUser as any).userProfile.avatar_url,
+                      }
+                    : {},
+                };
+            saveActiveSessionUser(resolvedUser);
+            setCurrentUser(resolvedUser);
+
+            const userCache = await getCachedAppData(resolvedUser.id);
+            if (userCache) {
+              if (userCache.userProfile) setUserProfile(userCache.userProfile);
+              if (userCache.tokens) setTokens(userCache.tokens);
+              if (userCache.wallet) setWallet(userCache.wallet);
+              setUnreadNotificationCount(userCache.unreadCount || 0);
+              setLastSyncTimestamp(userCache.lastSyncTimestamp || null);
+            }
+            setSessionStatus('offline');
+          } else {
+            setCurrentUser(null);
+            setUserProfile(null);
+            setTokens([]);
+          }
         }
       } catch (err) {
-        console.warn('[App] Offline cache bootstrap note:', err);
+        console.warn('[App] Offline cache bootstrap exception, checking local storage:', err);
+        const fallbackUser = getActiveSessionUser();
+        if (fallbackUser?.id) {
+          setCurrentUser(fallbackUser);
+          setSessionStatus('offline');
+        }
       }
     };
 
@@ -398,7 +594,9 @@ export default function App() {
         setConnectionToast('online');
       }
 
-      performBackgroundSync(currentUserRef.current, true);
+      if (currentUserRef.current) {
+        performBackgroundSync(currentUserRef.current, true);
+      }
     };
 
     const handleOffline = () => {
@@ -416,20 +614,31 @@ export default function App() {
     const supabase = getSupabase();
     const { data: authListener } = supabase.auth.onAuthStateChange(async (event, session) => {
       if (event === 'SIGNED_OUT') {
-        const oldUserId = currentUserRef.current?.id;
-        setCurrentUser(null);
-        setUserProfile(null);
-        setTokens([]);
-        setWallet(INITIAL_WALLET);
-        setUnreadNotificationCount(0);
-        if (oldUserId) {
-          await clearCachedAppData(oldUserId);
+        // If device is offline, ignore SIGNED_OUT event so token refresh failure offline doesn't log user out
+        if (typeof navigator !== 'undefined' && !navigator.onLine) {
+          console.warn('[App] Offline SIGNED_OUT event ignored - preserving offline session.');
+          setSessionStatus('offline');
+          return;
+        }
+
+        const activeLocalUser = getActiveSessionUser();
+        if (!activeLocalUser) {
+          const oldUserId = currentUserRef.current?.id;
+          setCurrentUser(null);
+          setUserProfile(null);
+          setTokens([]);
+          setWallet(INITIAL_WALLET);
+          setUnreadNotificationCount(0);
+          if (oldUserId) {
+            await clearCachedAppData(oldUserId);
+          }
         }
       } else if (session?.user) {
         if (currentUserRef.current?.id && currentUserRef.current.id !== session.user.id) {
           setTokens([]);
           setUserProfile(null);
         }
+        saveActiveSessionUser(session.user);
         setCurrentUser(session.user);
         performBackgroundSync(session.user, true);
       }
@@ -443,14 +652,15 @@ export default function App() {
     };
   }, []);
 
-  // Check MFA level when app regains focus or is reopened
+  // Check MFA level when app regains focus or is reopened (only when online)
   useEffect(() => {
     const handleFocus = async () => {
-      if (currentUser) {
+      if (currentUser && typeof navigator !== 'undefined' && navigator.onLine) {
         try {
           const assurance = await getMFAAssuranceLevel();
           if (assurance.requiresMFA) {
             console.log('[App] Session requires AAL2 MFA on app focus.');
+            clearActiveSessionUser(currentUser.id);
             setCurrentUser(null);
           }
         } catch (e) {
@@ -463,14 +673,10 @@ export default function App() {
     return () => window.removeEventListener('focus', handleFocus);
   }, [currentUser]);
 
-  // Auto-detect screen size and switch between Mobile and Desktop views
+  // Auto-detect screen size and switch between Mobile and Desktop views automatically
   useEffect(() => {
     const handleResize = () => {
-      if (window.innerWidth < 768) {
-        setViewMode('mobile');
-      } else {
-        setViewMode('desktop');
-      }
+      setIsMobile(window.innerWidth < 768);
     };
 
     handleResize(); // Check initially on mount
@@ -492,7 +698,7 @@ export default function App() {
       setStatusBarColor('#030710');
       initMobileStatusBar(true, '#030710');
     }
-  }, [authChecking, currentUser, viewMode, activeTab]);
+  }, [authChecking, currentUser, isMobile, activeTab]);
 
   // Capacitor Mobile Lifecycle (Splash Screen & Android Hardware Back Button)
   useEffect(() => {
@@ -507,18 +713,8 @@ export default function App() {
         triggerHaptic.light();
         return true;
       }
-      if (isRewardModalOpen) {
-        setIsRewardModalOpen(false);
-        triggerHaptic.light();
-        return true;
-      }
       if (isWalletModalOpen) {
         setIsWalletModalOpen(false);
-        triggerHaptic.light();
-        return true;
-      }
-      if (isApiConsoleOpen) {
-        setIsApiConsoleOpen(false);
         triggerHaptic.light();
         return true;
       }
@@ -545,9 +741,7 @@ export default function App() {
   }, [
     authChecking,
     isHowItWorksOpen,
-    isRewardModalOpen,
     isWalletModalOpen,
-    isApiConsoleOpen,
     isSidebarOpenMobile,
     activeTab,
   ]);
@@ -588,15 +782,21 @@ export default function App() {
   }, [currentUser, userProfile, tokens, wallet, unreadNotificationCount, lastSyncTimestamp, sessionStatus]);
 
   const handleSignOut = async () => {
+    const activeUserId = currentUser?.id;
     try {
+      clearActiveSessionUser(activeUserId);
       const supabase = getSupabase();
       await supabase.auth.signOut().catch(() => {});
     } catch (e) {
       console.error('Sign out error:', e);
     } finally {
-      await clearCachedAppData().catch(() => {});
+      if (activeUserId) {
+        await clearCachedAppData(activeUserId).catch(() => {});
+      }
       setCurrentUser(null);
       setUserProfile(null);
+      setTokens([]);
+      setWallet(INITIAL_WALLET);
       setSessionStatus('authenticated_local');
     }
   };
@@ -637,17 +837,17 @@ export default function App() {
   // Auto-detect network deployment when user pastes/types contract address in real time
   useEffect(() => {
     const cleanAddr = addressInput.trim();
-    if (!cleanAddr || cleanAddr.length < 10) return;
+    if (!cleanAddr) return;
 
     const timer = setTimeout(async () => {
       try {
-        const autoDetected = await detectEVMChainForContractAddress(cleanAddr);
-        if (autoDetected && autoDetected.chainId) {
-          const normKey = normalizeChainKey(autoDetected.chainId);
+        const lookup = await lookupBlockchainForToken(cleanAddr, selectedChain);
+        if (lookup && lookup.chainId) {
+          const normKey = normalizeChainKey(lookup.chainId);
           if (normKey !== normalizeChainKey(selectedChain)) {
             setSelectedChain(normKey);
             setAutoSwitchNotice(
-              `⚡ Auto-switched network to ${autoDetected.name} (Chain ID: ${normKey}) where contract was verified!`
+              `⚡ Auto-switched network to ${lookup.blockchain} where token is deployed!`
             );
           }
         }
@@ -657,20 +857,13 @@ export default function App() {
     }, 450);
 
     return () => clearTimeout(timer);
-  }, [addressInput]);
+  }, [addressInput, selectedChain]);
 
-  // Handle Token Fetching with Network-Aware Discovery
+  // Handle Token Fetching with Network-Aware Discovery & Full Security Audit Pipeline
   const handleFetchToken = async (targetAddress?: string) => {
     const addr = (targetAddress || addressInput).trim();
-    if (!addr) {
-      setErrorMessage('Please enter a valid token contract address or asset identifier');
-      return;
-    }
-
-    // Validate format before starting loading animation
-    const validation = validateTokenIdentifier(selectedChain, addr);
-    if (!validation.isValid) {
-      setErrorMessage('Unable to fetch details from this contract address. Please check the contract address and selected network, and try again.');
+    if (!addr || addr.length < 1) {
+      setErrorMessage('Please enter a valid token contract address or asset identifier.');
       setIsLoading(false);
       setIsVerifying(false);
       setStatusMessage(null);
@@ -681,11 +874,11 @@ export default function App() {
     setIsLoading(true);
     setIsVerifying(true);
     setVerificationStage(0);
-    setStatusMessage('✓ Network detected');
+    setStatusMessage('Detecting blockchain network...');
     setErrorMessage(null);
     setAutoSwitchNotice(null);
 
-    // Ensure all cards show skeleton state immediately
+    // Initial skeleton placeholder for smooth layout transition
     setFetchedToken({
       id: 'token-pending',
       address: addr,
@@ -734,51 +927,52 @@ export default function App() {
       verified: false,
     });
 
-    // Schedule progressive stage reveals
-    const timer1 = setTimeout(() => {
-      setVerificationStage(1);
-      setStatusMessage('✓ Token metadata loaded');
-    }, 600);
-
-    const timer2 = setTimeout(() => {
-      setVerificationStage(2);
-      setStatusMessage('✓ Contract & liquidity verified');
-    }, 1400);
-
-    const timer3 = setTimeout(() => {
-      setVerificationStage(3);
-      setStatusMessage('✓ Logo & branding optimized');
-    }, 2200);
-
-    const timer4 = setTimeout(() => {
-      setVerificationStage(4);
-      setStatusMessage('✓ Verification report complete');
-    }, 3000);
-
     try {
-      // 0. Perform normalized token discovery across networks & providers
-      const discovery = await discoverToken(addr, selectedChain);
-
-      let activeChainKey = discovery?.chainId || normalizeChainKey(selectedChain);
-      let blockchainType = discovery?.blockchainType || (isEvmChain(activeChainKey) ? 'evm' : 'unknown');
+      // ----------------------------------------------------
+      // STAGE 0: Network Resolution & Format Validation
+      // ----------------------------------------------------
+      const lookup = await lookupBlockchainForToken(addr, selectedChain).catch(() => null);
+      let activeChainKey = lookup?.chainId || normalizeChainKey(selectedChain);
+      let blockchainType = lookup?.blockchainType || (isEvmChain(activeChainKey) ? 'evm' : 'unknown');
 
       if (activeChainKey !== normalizeChainKey(selectedChain) && SUPPORTED_CHAINS[activeChainKey]) {
         setSelectedChain(activeChainKey);
         setAutoSwitchNotice(
-          `⚡ Auto-switched network to ${discovery?.blockchainName || activeChainKey} where asset was identified!`
+          `⚡ Auto-switched network to ${lookup?.blockchain || activeChainKey} where asset was identified!`
         );
       }
 
+      const validation = validateTokenIdentifier(activeChainKey, addr, blockchainType);
+      if (!validation.isValid) {
+        setErrorMessage(validation.error || `Invalid contract address format for ${getChainInfo(activeChainKey).name}.`);
+        setFetchedToken(null);
+        return;
+      }
+
+      setVerificationStage(0);
+      setStatusMessage('✓ Network identified');
+
+      // ----------------------------------------------------
+      // STAGE 1: On-Chain Metadata & Indexer Resolution
+      // ----------------------------------------------------
+      setVerificationStage(1);
+      setStatusMessage('Reading on-chain smart contract...');
+
       // 1. Fetch smart contract metadata directly via Ethers.js for EVM chains
       let erc20Meta = isEvmChain(activeChainKey, blockchainType)
-        ? await fetchERC20MetadataFromBlockchain(addr, activeChainKey, apiKeys)
+        ? await fetchERC20MetadataFromBlockchain(addr, activeChainKey, apiKeys).catch(() => null)
         : null;
 
+      // 1b. If non-EVM chain (Polkadot, Solana, TON, TRON, XRPL, Cosmos, Move), fetch token metadata via specialized providers
+      if (!erc20Meta && !isEvmChain(activeChainKey, blockchainType)) {
+        erc20Meta = await fetchNonEvmTokenMetadata(addr, activeChainKey, blockchainType).catch(() => null);
+      }
+
       // If erc20Meta wasn't found on selected EVM chain, check if contract exists on other major EVM chains
-      if (!erc20Meta && !discovery && isEvmChain(activeChainKey, blockchainType)) {
+      if (!erc20Meta && isEvmChain(activeChainKey, blockchainType)) {
         const majorChainsToTest = ['1', '137', '8453', '42161', '56'].filter((c) => c !== activeChainKey);
         for (const testChain of majorChainsToTest) {
-          const testMeta = await fetchERC20MetadataFromBlockchain(addr, testChain, apiKeys);
+          const testMeta = await fetchERC20MetadataFromBlockchain(addr, testChain, apiKeys).catch(() => null);
           if (testMeta && (testMeta.name || testMeta.symbol)) {
             erc20Meta = testMeta;
             activeChainKey = testChain;
@@ -792,25 +986,56 @@ export default function App() {
       }
 
       // 2. Fetch DEX price, volume & liquidity via DexScreener API and CoinGecko API
-      const dexData = discovery?.marketData || (await fetchDexScreenerData(addr, activeChainKey));
-      const cgData = await fetchCoinGeckoSupplyData(addr, activeChainKey);
+      let [dexData, cgData] = await Promise.all([
+        fetchDexScreenerData(addr, activeChainKey, erc20Meta?.name, erc20Meta?.symbol).catch(() => null),
+        fetchCoinGeckoSupplyData(addr, activeChainKey, erc20Meta?.name, erc20Meta?.symbol).catch(() => null),
+      ]);
+
+      // If CoinGecko didn't return data on first pass but DexScreener or ERC20 found name/symbol, perform secondary search
+      const resolvedNameCandidate = erc20Meta?.name || dexData?.name;
+      const resolvedSymbolCandidate = erc20Meta?.symbol || dexData?.symbol;
+      if ((!cgData || !cgData.logoUrl) && (resolvedNameCandidate || resolvedSymbolCandidate)) {
+        const secondaryCg = await fetchCoinGeckoSupplyData(addr, activeChainKey, resolvedNameCandidate, resolvedSymbolCandidate).catch(() => null);
+        if (secondaryCg) {
+          cgData = { ...cgData, ...secondaryCg };
+        }
+      }
+
+      // Fallback synthesis for identified non-EVM assets
+      if (!erc20Meta && !isEvmChain(activeChainKey, blockchainType)) {
+        const bName = lookup?.blockchain || (blockchainType === 'polkadot' ? 'Polkadot Network' : 'Multi-Chain Asset');
+        const shortSym = addr.includes(':') ? addr.split(':')[1].toUpperCase() : addr.slice(0, 4).toUpperCase();
+        erc20Meta = {
+          address: addr,
+          chainId: activeChainKey,
+          blockchainType: blockchainType || 'polkadot',
+          blockchainName: bName,
+          tokenStandard: lookup?.tokenStandard || 'Substrate Asset',
+          name: `${bName} (${shortSym})`,
+          symbol: shortSym || 'DOT',
+          decimals: 10,
+          totalSupply: '1000000000',
+          rawTotalSupply: '1000000000',
+          logoUrl: 'https://cryptologos.cc/logos/polkadot-new-dot-logo.svg?v=035',
+          isRenounced: true,
+        };
+      }
 
       // Verify whether ANY valid token metadata or smart contract was actually found
-      const hasValidName = discovery?.name || cgData?.name || erc20Meta?.name;
-      const hasValidSymbol = discovery?.symbol || cgData?.symbol || erc20Meta?.symbol;
+      const hasValidName = cgData?.name || erc20Meta?.name || dexData?.name;
+      const hasValidSymbol = cgData?.symbol || erc20Meta?.symbol || dexData?.symbol;
 
-      if (!hasValidName && !hasValidSymbol) {
-        clearTimeout(timer1);
-        clearTimeout(timer2);
-        clearTimeout(timer3);
-        clearTimeout(timer4);
-        setFetchedToken(null);
-        setErrorMessage('Unable to fetch details from this contract address. Please check the contract address and selected network, and try again.');
-        setIsVerifying(false);
-        setIsLoading(false);
-        setStatusMessage(null);
-        return;
+      if (!hasValidName && !hasValidSymbol && !erc20Meta) {
+        throw new Error(`No token contract or market pair found for "${addr}" on ${getChainInfo(activeChainKey).name}. Please verify the contract address and network.`);
       }
+
+      setStatusMessage('✓ Token metadata loaded');
+
+      // ----------------------------------------------------
+      // STAGE 2: Market & Liquidity Verification
+      // ----------------------------------------------------
+      setVerificationStage(2);
+      setStatusMessage('Analyzing liquidity & market pairs...');
 
       // Multi-Source Total Supply Resolution Algorithm
       let resolvedSupplyNum = 0;
@@ -833,29 +1058,46 @@ export default function App() {
       const chainMeta = getChainInfo(activeChainKey);
       const chainLogoUrl = getChainLogoUrl(activeChainKey);
 
-      const tokenName = discovery?.name || cgData?.name || erc20Meta?.name || 'Unknown Token';
-      const tokenSymbol = discovery?.symbol || cgData?.symbol || erc20Meta?.symbol || 'TOK';
-      const rawLogoUrl = discovery?.logoUrl || erc20Meta?.logoUrl || cgData?.logoUrl || (dexData as any)?.logoUrl || '';
-      const preparedLogoUrl = rawLogoUrl ? await downloadAndPrepareImageSource(rawLogoUrl) : '';
+      const tokenName = erc20Meta?.name || cgData?.name || (dexData as any)?.name || 'Unknown Token';
+      const tokenSymbol = erc20Meta?.symbol || cgData?.symbol || (dexData as any)?.symbol || 'TOK';
+      const rawLogoUrl = erc20Meta?.logoUrl || cgData?.logoUrl || (dexData as any)?.logoUrl || '';
+      
+      // Multi-provider logo resolver with deterministic priority fallback (using address, symbol, and name)
+      let resolvedLogo = { logoUrl: '', logoSource: 'fallback' };
+      try {
+        resolvedLogo = await resolveTokenLogoWithFallback(
+          addr,
+          activeChainKey,
+          rawLogoUrl,
+          blockchainType,
+          tokenSymbol,
+          tokenName
+        );
+      } catch {
+        resolvedLogo = { logoUrl: rawLogoUrl, logoSource: 'fallback' };
+      }
+
+      const preparedLogoUrl = resolvedLogo.logoUrl ? await downloadAndPrepareImageSource(resolvedLogo.logoUrl).catch(() => resolvedLogo.logoUrl) : '';
 
       erc20Meta = {
         address: addr,
         chainId: activeChainKey,
-        chainName: discovery?.blockchainName || chainMeta.name,
-        network: discovery?.blockchainName || chainMeta.name,
+        chainName: lookup?.blockchain || chainMeta.name,
+        network: lookup?.blockchain || chainMeta.name,
         chainSymbol: chainMeta.symbol,
         chainLogoUrl: chainLogoUrl,
         name: tokenName,
         symbol: tokenSymbol,
-        decimals: discovery?.decimals || erc20Meta?.decimals || 18,
+        decimals: erc20Meta?.decimals || 18,
         totalSupply: resolvedSupplyNum.toString(),
         rawTotalSupply: String(resolvedSupplyNum),
         logoUrl: preparedLogoUrl,
+        logoSource: resolvedLogo.logoSource,
         ownerAddress: erc20Meta?.ownerAddress,
         isRenounced: erc20Meta?.isRenounced ?? true,
         blockchainType,
-        tokenStandard: discovery?.tokenStandard,
-        asset_identifier_type: discovery?.asset_identifier_type || (blockchainType === 'xrpl' ? 'issued_asset' : 'contract_address'),
+        tokenStandard: lookup?.tokenStandard || (blockchainType === 'polkadot' ? 'Substrate Asset' : blockchainType === 'xrpl' ? 'issued_asset' : blockchainType === 'ton' ? 'Jetton' : blockchainType === 'solana' ? 'SPL' : blockchainType === 'cosmos' ? 'IBC Token' : 'ERC-20'),
+        asset_identifier_type: blockchainType === 'polkadot' ? 'substrate_asset' : blockchainType === 'xrpl' ? 'issued_asset' : blockchainType === 'solana' ? 'mint' : blockchainType === 'ton' ? 'jetton' : isEvmChain(activeChainKey, blockchainType) ? 'contract_address' : 'asset_identifier',
       } as any;
 
       const priceUsd = dexData?.priceUsd ?? cgData?.priceUsd ?? 0;
@@ -880,13 +1122,27 @@ export default function App() {
         circulatingSupply: cgData?.circulatingSupply || resolvedSupplyNum,
       };
 
-      // 3. Security & honeypot analysis
-      const safety = await analyzeTokenSafety(erc20Meta, marketData, activeChainKey);
+      setStatusMessage('✓ Contract & liquidity verified');
 
-      // 4. Run Multi-Provider Aggregation Engine
-      const verificationReport = await verifyToken(erc20Meta.address, activeChainKey, erc20Meta.logoUrl, blockchainType);
+      // ----------------------------------------------------
+      // STAGE 3: Multi-Provider Security & Honeypot Scan
+      // ----------------------------------------------------
+      setVerificationStage(3);
+      setStatusMessage('Running security & honeypot scan...');
 
-      // 5. Construct token object
+      const [safety, verificationReport] = await Promise.all([
+        analyzeTokenSafety(erc20Meta, marketData, activeChainKey),
+        verifyToken(erc20Meta.address, activeChainKey, erc20Meta.logoUrl, blockchainType),
+      ]);
+
+      setStatusMessage('✓ Security scan complete');
+
+      // ----------------------------------------------------
+      // STAGE 4: Finalize Verification & Assemble Result
+      // ----------------------------------------------------
+      setVerificationStage(4);
+      setStatusMessage('✓ Verification report complete');
+
       const tokenObj: SubmittedToken = {
         id: `token-${Date.now()}`,
         address: erc20Meta.address,
@@ -903,83 +1159,22 @@ export default function App() {
         verified: verificationReport.status === 'APPROVED',
       };
 
-      // Wait for stage 4 completion before finalizing
-      setTimeout(async () => {
-        let isSavedInCloudflare = false;
-        let isSavedInSupabase = false;
-
-        // 1. Primary Global Registry Lookup: Query Cloudflare Worker Token API
-        try {
-          const cfCheck = await getTokenByAddressFromWorker(activeChainKey, erc20Meta.address);
-          if (cfCheck.exists) {
-            isSavedInCloudflare = true;
-            console.log('[Verification] Token already exists in Cloudflare Worker global registry:', cfCheck.token);
-          }
-        } catch (cfErr) {
-          console.warn('[Verification] Cloudflare Worker token check warning:', cfErr);
-        }
-
-        // 2. Query Supabase Database (User portfolio / database check)
-        if (currentUser?.id) {
-          try {
-            isSavedInSupabase = await checkTokenAlreadySaved(
-              currentUser.id,
-              activeChainKey,
-              erc20Meta.address
-            );
-          } catch (err) {
-            console.warn('[Verification] Supabase check error:', err);
-          }
-        } else {
-          const dupCheck = await verifyTokenContractUnique(
-            erc20Meta.address,
-            activeChainKey,
-            undefined,
-            (erc20Meta as any).blockchainType
-          );
-          isSavedInSupabase = !dupCheck.isUnique;
-        }
-
-        const isEvmToken = isEvmChain(activeChainKey, (erc20Meta as any).blockchainType);
-        const cleanAddr = isEvmToken ? erc20Meta.address.toLowerCase().trim() : erc20Meta.address.trim();
-        const activeChainClean = activeChainKey.toLowerCase().trim();
-        const existsLocally = tokens.some((t) => {
-          const tIsEvm = isEvmChain(t.chainId, (t.metadata as any)?.blockchainType);
-          const tAddr = tIsEvm ? t.address.toLowerCase().trim() : t.address.trim();
-          const tChain = (t.chainId || '').toLowerCase().trim();
-          return tAddr === cleanAddr && tChain === activeChainClean;
-        });
-        const alreadySaved = isSavedInCloudflare || existsLocally || isSavedInSupabase;
-
-        setIsTokenSavedInAccount(alreadySaved);
-
-        if (alreadySaved) {
-          setErrorMessage('This token already exists in TokenCare.');
-        } else {
-          setErrorMessage(null);
-        }
-
-        setFetchedToken(tokenObj);
-        setCurrentStep(3); // Advance to Review Details
-        setIsVerifying(false);
-        setIsLoading(false);
-        setStatusMessage(null);
-      }, 3100);
+      // Display the fully fetched token details immediately for review
+      setErrorMessage(null);
+      setFetchedToken(tokenObj);
+      setCurrentStep(3); // Advance to Review Details
     } catch (err: any) {
       console.error('[App] Error fetching token:', err);
       setFetchedToken(null);
-      setErrorMessage('Could not complete verification. Check your contract address.');
-      clearTimeout(timer1);
-      clearTimeout(timer2);
-      clearTimeout(timer3);
-      clearTimeout(timer4);
+      setErrorMessage(err?.message || 'Could not complete token verification. Please check your contract address and selected network.');
+    } finally {
       setIsVerifying(false);
       setIsLoading(false);
       setStatusMessage(null);
     }
   };
 
-  // Handle Saving Token to Directory
+  // Handle Saving Token to Directory via Vercel Backend
   const handleSaveToken = async (settings: any) => {
     if (!fetchedToken) return;
 
@@ -988,151 +1183,136 @@ export default function App() {
 
     try {
       const targetChain = fetchedToken.chainId || selectedChain;
-      const bType = (fetchedToken.metadata as any)?.blockchainType;
-      const isEvm = isEvmChain(targetChain, bType);
-
-      // Log duplicate check parameters for debugging
-      console.log('TOKEN DUPLICATE CHECK', {
-        userId: currentUser?.id,
-        chainId: String(targetChain),
-        blockchainType: bType,
-        contractAddress: fetchedToken.address,
-      });
-
-      // 1. Cloudflare Worker Global Registry Duplicate Check
-      const cfCheck = await getTokenByAddressFromWorker(targetChain, fetchedToken.address);
-      if (cfCheck.exists) {
-        setErrorMessage('This token already exists in TokenCare.');
-        setIsSavingToken(false);
-        return;
-      }
-
-      // 2. Verify Duplicate Address in Local State for this user on this chain
-      const cleanAddress = isEvm ? fetchedToken.address.toLowerCase().trim() : fetchedToken.address.trim();
-      const targetChainClean = targetChain.toLowerCase().trim();
-
-      const existsLocally = tokens.some((t) => {
-        const tIsEvm = isEvmChain(t.chainId, (t.metadata as any)?.blockchainType);
-        const tAddr = tIsEvm ? t.address.toLowerCase().trim() : t.address.trim();
-        const tChain = (t.chainId || '').toLowerCase().trim();
-        return tAddr === cleanAddress && tChain === targetChainClean && t.id !== fetchedToken.id;
-      });
-
-      if (existsLocally) {
-        setErrorMessage(
-          `This token is already saved in your account.`
-        );
-        setIsSavingToken(false);
-        return;
-      }
-
-      // 3. Direct RPC Check via token_exists_for_user
-      if (currentUser?.id) {
-        const alreadyExists = await checkTokenAlreadySaved(
-          currentUser.id,
-          targetChain,
-          fetchedToken.address
-        );
-
-        console.log('TOKEN ALREADY EXISTS:', alreadyExists);
-
-        if (alreadyExists) {
-          setErrorMessage('This token is already saved in your account.');
-          setIsSavingToken(false);
-          return;
-        }
-      }
-
-      // 4. Verify Duplicate Address in Supabase Database for this user
-      const dupCheck = await verifyTokenContractUnique(
-        fetchedToken.address,
-        targetChain,
-        currentUser?.id,
-        bType
-      );
-      if (!dupCheck.isUnique) {
-        setErrorMessage(
-          dupCheck.error ||
-            `This token is already saved in your account.`
-        );
-        setIsSavingToken(false);
-        return;
-      }
-
-      // 5. Save Token to Supabase Database (Atomic catalog + user relation)
-      const supabaseResult = await addTokenToUserInSupabase(fetchedToken, currentUser?.id);
-      if (!supabaseResult.success) {
-        setErrorMessage(
-          supabaseResult.error || `Failed to save token address "${fetchedToken.address}" to Supabase database.`
-        );
-        setIsSavingToken(false);
-        return;
-      }
-
-      if (supabaseResult.alreadyExists) {
-        setErrorMessage(`This token is already saved in your account.`);
-        setIsSavingToken(false);
-        return;
-      }
-
-      // 4. Record Reward & Update Local State
-      const { updatedWallet, rewardEarnedTokens } = recordTokenSubmissionReward(
-        fetchedToken,
-        wallet,
-        currentUser?.id
-      );
-      setWallet(updatedWallet);
-
-      const updatedTokens = [fetchedToken, ...tokens.filter((t) => t.id !== fetchedToken.id)];
-      setTokens(updatedTokens);
-      saveSubmittedTokens(updatedTokens, currentUser?.id);
-
-      // 5. Automatically post token payload to Cloudflare Worker endpoint
-      const chainInfo = getChainInfo(fetchedToken.chainId || selectedChain);
-      const chainKey =
+      const chainInfo = getChainInfo(targetChain);
+      const blockchain =
         fetchedToken.metadata.blockchainName ||
         (fetchedToken.metadata as any)?.blockchain_name ||
         (fetchedToken.metadata as any)?.blockchain ||
         fetchedToken.metadata.chainName ||
-        fetchedToken.metadata.network ||
         chainInfo.name ||
-        fetchedToken.chainId;
+        'Polygon';
 
-      await uploadTokensToWorker(
-        [
-          {
-            name: fetchedToken.metadata.name,
-            symbol: fetchedToken.metadata.symbol,
-            contractAddress: fetchedToken.address,
-            logoUrl: fetchedToken.metadata.logoUrl || '',
-            verified: fetchedToken.verified ?? true,
-          },
-        ],
-        chainKey
-      );
+      const blockchainSymbol =
+        fetchedToken.metadata.chainSymbol ||
+        (fetchedToken.metadata as any)?.blockchainSymbol ||
+        chainInfo.symbol ||
+        'MATIC';
 
-      if (currentUser?.id) {
-        loadUserProfile(currentUser.id);
+      let chainIdNum = 137;
+      if (typeof targetChain === 'number' && !isNaN(targetChain)) {
+        chainIdNum = targetChain;
+      } else if (chainInfo.id && !isNaN(Number(chainInfo.id))) {
+        chainIdNum = Number(chainInfo.id);
+      } else if (!isNaN(Number(targetChain)) && Number(targetChain) > 0) {
+        chainIdNum = Number(targetChain);
       }
 
-      confetti({
-        particleCount: 100,
-        spread: 80,
-        origin: { y: 0.6 },
-        colors: ['#10B981', '#34D399', '#059669', '#F59E0B'],
-      });
+      const userId = currentUser?.id || wallet.walletAddress || 'anonymous_user';
 
-      setCurrentStep(4);
-      setSaveSuccessMessage(
-        `Token has been successfully saved. You receive ${rewardEarnedTokens || 15} TokenCare tokens.`
-      );
+      // 1. Always save to user's local Saved Tokens List (up to 20 tokens)
+      const savedItem = submittedTokenToSavedItem(fetchedToken, selectedChain);
+      const localRes = addLocalSavedToken(savedItem, currentUser?.id);
+      if (localRes.success) {
+        setSavedTokensCount(localRes.list.length);
+      }
 
-      setTimeout(() => {
-        setSaveSuccessMessage(null);
-      }, 5000);
+      // Submit token array directly to Vercel backend /api/save-token matching strict payload structure
+      const payloadTokens = [
+        {
+          blockchain,
+          blockchainSymbol,
+          chainId: chainIdNum,
+          contractAddress: fetchedToken.address,
+          tokenName: fetchedToken.metadata.name || 'Unknown Token',
+          tokenSymbol: (fetchedToken.metadata.symbol || 'TOK').toUpperCase(),
+          logoUrl: fetchedToken.metadata.logoUrl || '',
+        },
+      ];
+
+      const saveResponse = await saveTokensToBackend(userId, payloadTokens);
+
+      if (saveResponse.success) {
+        // If rejected as duplicate by backend
+        const isDuplicateRejected =
+          Array.isArray(saveResponse.rejected) &&
+          saveResponse.rejected.length > 0 &&
+          (!saveResponse.saved || saveResponse.saved.length === 0);
+
+        if (isDuplicateRejected) {
+          const rejectReason =
+            saveResponse.rejected?.[0]?.reason ||
+            saveResponse.message ||
+            'This token already exists in TokenCare directory.';
+          // Token is still saved in local saved list
+          setSaveSuccessMessage(`"${savedItem.symbol}" saved to your list (${localRes.list.length}/${MAX_SAVED_TOKENS})! (Already registered in directory)`);
+          setCurrentStep(4);
+          setIsSavingToken(false);
+          setTimeout(() => {
+            setSaveSuccessMessage(null);
+          }, 5000);
+          return;
+        }
+
+        // Update local tokens list
+        const updatedTokens = [
+          fetchedToken,
+          ...tokens.filter((t) => t.id !== fetchedToken.id && t.address.toLowerCase() !== fetchedToken.address.toLowerCase()),
+        ];
+        setTokens(updatedTokens);
+        saveSubmittedTokens(updatedTokens, currentUser?.id);
+
+        // Reflect rewards if returned from server response
+        if (saveResponse.reward?.amount) {
+          const earned = Number(saveResponse.reward.amount);
+          setWallet((prev) => ({
+            ...prev,
+            totalTokens: prev.totalTokens + earned,
+            totalUsd: (prev.totalTokens + earned) * REWARD_RATE_USD,
+            unclaimedTokens: prev.unclaimedTokens + earned,
+            unclaimedUsd: (prev.unclaimedTokens + earned) * REWARD_RATE_USD,
+          }));
+        }
+
+        if (currentUser?.id) {
+          loadUserProfile(currentUser.id);
+          fetchUnreadNotificationCount(currentUser.id).then((count) => setUnreadNotificationCount(count)).catch(() => {});
+        }
+
+        confetti({
+          particleCount: 100,
+          spread: 80,
+          origin: { y: 0.6 },
+          colors: ['#10B981', '#34D399', '#059669', '#F59E0B'],
+        });
+
+        setCurrentStep(4);
+        const successMsg =
+          saveResponse.message ||
+          (saveResponse.reward?.amount
+            ? `Token "${savedItem.symbol}" saved to your list (${localRes.list.length}/${MAX_SAVED_TOKENS})! You received ${saveResponse.reward.amount} ${saveResponse.reward.symbol || 'TC'}.`
+            : `Token "${savedItem.symbol}" saved to your list (${localRes.list.length}/${MAX_SAVED_TOKENS})!`);
+        setSaveSuccessMessage(successMsg);
+
+        setTimeout(() => {
+          setSaveSuccessMessage(null);
+        }, 5000);
+      } else {
+        // Even if backend reports an error, if locally saved, inform user
+        if (localRes.success) {
+          setCurrentStep(4);
+          setSaveSuccessMessage(`"${savedItem.symbol}" saved to your local list (${localRes.list.length}/${MAX_SAVED_TOKENS})!`);
+          setTimeout(() => {
+            setSaveSuccessMessage(null);
+          }, 5000);
+        } else {
+          setErrorMessage(
+            localRes.error || saveResponse.message || saveResponse.error || 'Failed to save token. Please try again.'
+          );
+        }
+      }
     } catch (err: any) {
       console.error('[App] Save error:', err);
-      setErrorMessage(err.message || 'An error occurred while saving the token to database.');
+      setErrorMessage(err?.message || 'An error occurred while communicating with the token save backend.');
     } finally {
       setIsSavingToken(false);
     }
@@ -1143,11 +1323,36 @@ export default function App() {
     setAddressInput('');
     setFetchedToken(null);
     setAutoSwitchNotice(null);
-    setIsTokenSavedInAccount(false);
     setErrorMessage(null);
   };
 
   const currentChainInfo = getChainInfo(selectedChain);
+
+  const handleAuthenticated = async (authedUser?: any) => {
+    let user = authedUser;
+    if (!user) {
+      try {
+        const supabase = getSupabase();
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+        user = session?.user;
+      } catch (e) {
+        console.warn('AuthScreen authenticated getSession note:', e);
+      }
+    }
+    if (!user) {
+      user = getActiveSessionUser();
+    }
+    if (user?.id) {
+      saveActiveSessionUser(user);
+      setCurrentUser(user);
+      await loadUserAndTokens(user.id, user);
+      if (typeof navigator !== 'undefined' && navigator.onLine) {
+        await performBackgroundSync(user, true);
+      }
+    }
+  };
 
   // Render Landing Splash Screen while checking auth session
   if (authChecking) {
@@ -1165,11 +1370,11 @@ export default function App() {
 
   // Render AuthScreen if unauthenticated
   if (!currentUser) {
-    return <AuthScreen onAuthenticated={() => loadUserAndTokens()} />;
+    return <AuthScreen onAuthenticated={handleAuthenticated} />;
   }
 
   // Dedicated Mobile View (Separate UI with Bottom Navigation & Real-Time Sync)
-  if (viewMode === 'mobile') {
+  if (isMobile) {
     return (
       <>
         <ToastNotification
@@ -1211,10 +1416,12 @@ export default function App() {
           handleSaveToken={handleSaveToken}
           handleResetForm={handleResetForm}
           onOpenHowItWorks={() => setIsHowItWorksOpen(true)}
-          onOpenRewardModal={() => setIsRewardModalOpen(true)}
+          onOpenRewardModal={() => {
+            // Navigate directly to mobile withdrawal view
+            const mobileWithdrawTab = 'withdrawals';
+            setActiveTab(mobileWithdrawTab);
+          }}
           onOpenWalletModal={() => setIsWalletModalOpen(true)}
-          onOpenApiConsole={() => setIsApiConsoleOpen(true)}
-          onSwitchToDesktop={() => setViewMode('desktop')}
           unreadCount={unreadNotificationCount}
           onUnreadCountChange={(count) => setUnreadNotificationCount(count)}
           isVerifying={isVerifying}
@@ -1226,13 +1433,7 @@ export default function App() {
           isOpen={isHowItWorksOpen}
           onClose={() => setIsHowItWorksOpen(false)}
         />
-        <RewardWalletModal
-          isOpen={isRewardModalOpen}
-          onClose={() => setIsRewardModalOpen(false)}
-          wallet={wallet}
-          onUpdateWallet={setWallet}
-          userId={currentUser?.id}
-        />
+
         <WalletConnectModal
           isOpen={isWalletModalOpen}
           onClose={() => setIsWalletModalOpen(false)}
@@ -1240,11 +1441,6 @@ export default function App() {
           onUpdateWallet={setWallet}
           userId={currentUser?.id}
         />
-        <ApiConsoleModal
-          isOpen={isApiConsoleOpen}
-          onClose={() => setIsApiConsoleOpen(false)}
-        />
-        <PWAInstallBanner />
       </>
     );
   }
@@ -1278,15 +1474,14 @@ export default function App() {
         onToggleCollapse={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
         wallet={wallet}
         onOpenWalletModal={() => setIsWalletModalOpen(true)}
-        onOpenRewardModal={() => setIsRewardModalOpen(true)}
-        onOpenApiConsole={() => setIsApiConsoleOpen(true)}
+        onOpenRewardModal={() => setActiveTab('payouts')}
         unreadCount={unreadNotificationCount}
       />
 
       {/* Main Content Area */}
       <div
         className={`flex-1 flex flex-col min-w-0 transition-all duration-300 h-screen overflow-hidden ${
-          isSidebarCollapsed ? 'lg:ml-20' : 'lg:ml-64'
+          isSidebarCollapsed ? 'md:ml-20' : 'md:ml-64'
         }`}
       >
         {/* Top Fixed Header (Hidden on standalone views like MFA, Explore, Help Center, Contact Support, Terms & Privacy, Preferences) */}
@@ -1296,15 +1491,13 @@ export default function App() {
           activeTab !== 'contact-support' &&
           activeTab !== 'terms-privacy' &&
           activeTab !== 'privacy-policy' &&
-          activeTab !== 'preferences' &&
-          activeTab !== 'developer' &&
-          activeTab !== 'api-console' && (
+          activeTab !== 'preferences' && (
           <header className="shrink-0 bg-[#090C13]/90 backdrop-blur-md border-b border-zinc-800/80 px-3 sm:px-6 py-2.5 flex items-center justify-between gap-3 z-30">
             <div className="flex items-center space-x-2.5 min-w-0">
               {/* Mobile Sidebar Hamburger Toggle */}
               <button
                 onClick={() => setIsSidebarOpenMobile(true)}
-                className="lg:hidden p-1.5 text-zinc-400 hover:text-white bg-zinc-900 rounded-lg border border-zinc-800 cursor-pointer"
+                className="md:hidden p-1.5 text-zinc-400 hover:text-white bg-zinc-900 rounded-lg border border-zinc-800 cursor-pointer"
               >
                 <Menu className="w-4 h-4" />
               </button>
@@ -1312,7 +1505,7 @@ export default function App() {
               {/* Desktop Collapse Toggle */}
               <button
                 onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
-                className="hidden lg:flex p-1.5 text-zinc-400 hover:text-white bg-zinc-900/80 hover:bg-zinc-800 rounded-lg border border-zinc-800/80 transition-colors cursor-pointer"
+                className="hidden md:flex p-1.5 text-zinc-400 hover:text-white bg-zinc-900/80 hover:bg-zinc-800 rounded-lg border border-zinc-800/80 transition-colors cursor-pointer"
                 title={isSidebarCollapsed ? 'Expand Sidebar' : 'Collapse Sidebar'}
               >
                 {isSidebarCollapsed ? (
@@ -1332,7 +1525,7 @@ export default function App() {
                     ? 'Payouts & Backend Server Hub'
                     : activeTab === 'settings'
                     ? 'Blockchain & API Settings'
-                    : activeTab ? String(activeTab).toUpperCase() : ''}
+                    : activeTab.toUpperCase()}
                 </h1>
                 <p className="text-[11px] text-zinc-400 truncate hidden sm:block">
                   {activeTab === 'add-token'
@@ -1349,33 +1542,31 @@ export default function App() {
             {/* Right Header Controls */}
             <div className="flex items-center space-x-2 shrink-0">
               {/* User Account Pill & Sign Out */}
-              {currentUser && (
-                <div className="flex items-center bg-zinc-900 border border-zinc-800 rounded-xl p-1 space-x-1">
-                  <div className="flex items-center space-x-1.5 px-2 py-0.5 text-xs text-zinc-300 font-medium">
-                    {currentUser.user_metadata?.avatar_url || userProfile?.avatar_url ? (
-                      <img
-                        src={currentUser.user_metadata?.avatar_url || userProfile?.avatar_url}
-                        alt="Avatar"
-                        className="w-4 h-4 rounded-full object-cover"
-                      />
-                    ) : (
-                      <div className="w-4 h-4 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold text-[9px]">
-                        {String(currentUser.email || currentUser.user_metadata?.username || 'U').charAt(0).toUpperCase()}
-                      </div>
-                    )}
-                    <span className="hidden sm:inline font-semibold text-emerald-400">
-                      {currentUser.email ? currentUser.email.split('@')[0] : 'Account'}
-                    </span>
-                  </div>
-                  <button
-                    onClick={handleSignOut}
-                    className="px-2 py-1 bg-zinc-800 hover:bg-rose-500/20 text-zinc-400 hover:text-rose-400 rounded-lg text-xs font-medium transition-colors cursor-pointer"
-                    title="Sign Out"
-                  >
-                    Sign Out
-                  </button>
+              <div className="flex items-center bg-zinc-900 border border-zinc-800 rounded-xl p-1 space-x-1">
+                <div className="flex items-center space-x-1.5 px-2 py-0.5 text-xs text-zinc-300 font-medium">
+                  {currentUser.user_metadata?.avatar_url || userProfile?.avatar_url ? (
+                    <img
+                      src={currentUser.user_metadata?.avatar_url || userProfile?.avatar_url}
+                      alt="Avatar"
+                      className="w-4 h-4 rounded-full object-cover"
+                    />
+                  ) : (
+                    <div className="w-4 h-4 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold text-[9px]">
+                      {currentUser.email ? currentUser.email.charAt(0).toUpperCase() : 'U'}
+                    </div>
+                  )}
+                  <span className="hidden sm:inline font-semibold text-emerald-400">
+                    {currentUser.email?.split('@')[0]}
+                  </span>
                 </div>
-              )}
+                <button
+                  onClick={handleSignOut}
+                  className="px-2 py-1 bg-zinc-800 hover:bg-rose-500/20 text-zinc-400 hover:text-rose-400 rounded-lg text-xs font-medium transition-colors cursor-pointer"
+                  title="Sign Out"
+                >
+                  Sign Out
+                </button>
+              </div>
 
               {/* How it works Button */}
               <button
@@ -1388,9 +1579,9 @@ export default function App() {
 
               {/* Notification Bell Button */}
               <button
-                onClick={() => setActiveTab('notifications')}
+                onClick={() => setIsDesktopNotificationOpen((prev) => !prev)}
                 className={`p-2 border rounded-xl relative transition-all cursor-pointer ${
-                  activeTab === 'notifications'
+                  isDesktopNotificationOpen
                     ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-300'
                     : 'bg-zinc-900 hover:bg-zinc-800 border-zinc-800 text-zinc-300 hover:text-white'
                 }`}
@@ -1406,21 +1597,11 @@ export default function App() {
 
               {/* Reward Pill */}
               <button
-                onClick={() => setIsRewardModalOpen(true)}
+                onClick={() => setActiveTab('payouts')}
                 className="hidden sm:flex px-3 py-1.5 bg-gradient-to-r from-amber-500/10 to-emerald-500/10 border border-amber-500/30 hover:border-amber-500/50 text-amber-300 rounded-lg text-xs font-bold font-mono items-center space-x-1.5 transition-all cursor-pointer"
               >
                 <Sparkles className="w-3.5 h-3.5 text-amber-400" />
                 <span>{wallet?.unclaimedTokens ?? 0} REWARD</span>
-              </button>
-
-              {/* View Mode Switcher Button */}
-              <button
-                onClick={() => setViewMode('mobile')}
-                className="px-2.5 py-1.5 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 text-emerald-300 rounded-lg text-xs font-bold flex items-center space-x-1.5 transition-all cursor-pointer"
-                title="Switch to Mobile UI View"
-              >
-                <Smartphone className="w-3.5 h-3.5 text-emerald-400" />
-                <span className="hidden sm:inline">Mobile View</span>
               </button>
             </div>
           </header>
@@ -1487,15 +1668,8 @@ export default function App() {
               initialTab="preferences"
             />
           </div>
-        ) : activeTab === 'developer' || activeTab === 'api-console' ? (
-          <div className="flex-1 flex flex-col min-h-0 overflow-hidden w-full h-full">
-            <DeveloperView
-              onBack={() => setActiveTab('settings')}
-              currentUser={currentUser}
-            />
-          </div>
         ) : (
-          <main className="flex-1 min-h-0 p-3 sm:p-5 space-y-4 max-w-5xl w-full mx-auto overflow-y-auto">
+          <main className="flex-1 min-h-0 p-3 sm:p-5 space-y-4 max-w-7xl w-full mx-auto overflow-y-auto">
             {activeTab === 'dashboard' ? (
             <DashboardOverview
               tokens={tokens}
@@ -1509,11 +1683,12 @@ export default function App() {
               }}
             />
           ) : activeTab === 'payouts' ? (
-            <WithdrawalView
+            <DesktopWithdrawalView
               currentUser={currentUser}
               userProfile={userProfile}
               wallet={wallet}
               onUpdateWallet={setWallet}
+              onNavigateTab={(tab) => setActiveTab(tab)}
             />
           ) : activeTab === 'notifications' ? (
             <NotificationCenterView
@@ -1523,13 +1698,18 @@ export default function App() {
               onUnreadCountChange={(count) => setUnreadNotificationCount(count)}
             />
           ) : activeTab === 'settings' ? (
-            <SettingsView
+            <DesktopSettingsView
               currentUser={currentUser}
               userProfile={userProfile}
               onUpdateProfile={(updated) => setUserProfile(updated)}
               onSignOut={handleSignOut}
               onNavigateTab={(tab) => setActiveTab(tab)}
-              onOpenApiConsole={() => setIsApiConsoleOpen(true)}
+            />
+          ) : activeTab === 'saved-tokens' || activeTab === 'my-saved-tokens' || activeTab === 'my-saved-list' ? (
+            <MySavedTokensView
+              userId={currentUser?.id}
+              onBackToDonate={() => setActiveTab('add-token')}
+              onNavigateAddToken={() => setActiveTab('add-token')}
             />
           ) : (
             <div className="space-y-3">
@@ -1625,12 +1805,6 @@ export default function App() {
                     logoReport={logoReport}
                     logoStatus={logoStatus}
                     trustScore={fetchedToken.verificationReport?.trustScore}
-                    isAlreadySaved={
-                      isTokenSavedInAccount ||
-                      tokens.some(
-                        (t) => t.address.toLowerCase().trim() === fetchedToken.address.toLowerCase().trim()
-                      )
-                    }
                     onSaveToken={handleSaveToken}
                     onCancel={handleResetForm}
                     isSaving={isSavingToken}
@@ -1664,14 +1838,6 @@ export default function App() {
         onClose={() => setIsHowItWorksOpen(false)}
       />
 
-      <RewardWalletModal
-        isOpen={isRewardModalOpen}
-        onClose={() => setIsRewardModalOpen(false)}
-        wallet={wallet}
-        onUpdateWallet={setWallet}
-        userId={currentUser?.id}
-      />
-
       <WalletConnectModal
         isOpen={isWalletModalOpen}
         onClose={() => setIsWalletModalOpen(false)}
@@ -1680,10 +1846,25 @@ export default function App() {
         userId={currentUser?.id}
       />
 
-      <ApiConsoleModal
-        isOpen={isApiConsoleOpen}
-        onClose={() => setIsApiConsoleOpen(false)}
+      {/* Floating Desktop Notification Popover Card */}
+      <DesktopNotificationPopover
+        currentUser={currentUser}
+        isOpen={isDesktopNotificationOpen}
+        onClose={() => setIsDesktopNotificationOpen(false)}
+        onNavigateToTab={(tab) => {
+          setActiveTab(tab);
+          setIsDesktopNotificationOpen(false);
+        }}
+        onUnreadCountChange={(count) => setUnreadNotificationCount(count)}
       />
+
+      {/* Floating Draggable Saved Tokens Circle Badge in Desktop / Tablet view */}
+      {!isMobile && activeTab !== 'saved-tokens' && activeTab !== 'my-saved-tokens' && activeTab !== 'my-saved-list' && savedTokensCount > 0 && (
+        <FloatingSavedTokensBadge
+          count={savedTokensCount}
+          onClick={() => setActiveTab('saved-tokens')}
+        />
+      )}
 
       <PWAInstallBanner />
     </div>

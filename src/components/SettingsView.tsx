@@ -35,7 +35,6 @@ import {
   QrCode,
   KeyRound,
   ShieldCheck,
-  Code2,
 } from 'lucide-react';
 import {
   beginMFAEnrollment,
@@ -71,7 +70,6 @@ interface SettingsViewProps {
   apiKeys?: any;
   setApiKeys?: any;
   onNavigateTab?: (tab: string) => void;
-  onOpenApiConsole?: () => void;
   initialSubView?: 'main' | 'help-center' | 'contact-support' | 'privacy-policy' | 'terms' | 'cookies' | 'preferences';
 }
 
@@ -82,7 +80,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   onSignOut,
   handleSignOut,
   onNavigateTab,
-  onOpenApiConsole,
   initialSubView = 'main',
 }) => {
   const signOutHandler = onSignOut || handleSignOut;
@@ -551,39 +548,39 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   return (
     <div className="w-full h-full flex flex-col min-h-0 overflow-hidden text-white font-sans animate-in fade-in duration-200">
       {/* FIXED TOP NAVIGATION HEADER FOR SETTINGS PAGE */}
-      <header className="shrink-0 z-40 bg-[#090C12] backdrop-blur-xl border-b border-emerald-500/30 rounded-b-2xl p-2.5 pt-safe-nav shadow-[0_4px_25px_rgba(0,0,0,0.7)] max-w-md mx-auto w-full transition-all">
+      <header className="shrink-0 z-40 bg-[#090C12] backdrop-blur-xl border-b border-emerald-500/30 rounded-b-2xl p-2.5 sm:p-4 pt-safe-nav shadow-[0_4px_25px_rgba(0,0,0,0.7)] max-w-md md:max-w-5xl mx-auto w-full transition-all">
         <div className="flex items-center justify-between">
-          <div className="flex items-center space-x-2.5">
+          <div className="flex items-center space-x-2.5 sm:space-x-3.5">
             {/* Avatar circle with online green status badge */}
             <div className="relative shrink-0">
-              <div className="w-10 h-10 rounded-full bg-zinc-900 border border-[#22C55E]/60 overflow-hidden flex items-center justify-center">
+              <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-full bg-zinc-900 border border-[#22C55E]/60 overflow-hidden flex items-center justify-center shadow-md">
                 {avatarUrl ? (
                   <img src={avatarUrl} alt="Avatar" className="w-full h-full object-cover" />
                 ) : (
-                  <div className="w-full h-full bg-gradient-to-tr from-[#15803D] via-[#16A34A] to-[#4ADE80] flex items-center justify-center text-black font-extrabold text-xs">
-                    {String(displayName || username || 'W').slice(0, 1).toUpperCase()}
+                  <div className="w-full h-full bg-gradient-to-tr from-[#15803D] via-[#16A34A] to-[#4ADE80] flex items-center justify-center text-black font-extrabold text-xs sm:text-sm">
+                    {(displayName || username || 'W').slice(0, 1).toUpperCase()}
                   </div>
                 )}
               </div>
               {/* Green Online Badge */}
-              <span className="absolute bottom-0 right-0 w-2.5 h-2.5 bg-[#22C55E] border-2 border-[#090C12] rounded-full shadow-[0_0_6px_rgba(34,197,94,0.8)]"></span>
+              <span className="absolute bottom-0 right-0 w-2.5 h-2.5 sm:w-3 sm:h-3 bg-[#22C55E] border-2 border-[#090C12] rounded-full shadow-[0_0_6px_rgba(34,197,94,0.8)]"></span>
             </div>
 
             {/* User Info */}
-            <div className="space-y-0.2 min-w-0">
-              <div className="flex items-center space-x-1.5">
-                <h2 className="text-xs font-bold text-white tracking-tight truncate">
+            <div className="space-y-0.5 min-w-0">
+              <div className="flex items-center space-x-2">
+                <h2 className="text-xs sm:text-sm font-bold text-white tracking-tight truncate">
                   {displayName || username || 'Wisdom'}
                 </h2>
                 <span
                   onClick={() => setShowVerificationModal(true)}
-                  className="inline-flex items-center space-x-0.5 text-[8px] font-bold text-[#4ADE80] bg-[#22C55E]/15 border border-[#22C55E]/40 px-1.5 py-0.2 rounded-full font-mono shrink-0 cursor-pointer hover:bg-[#22C55E]/25 transition-colors"
+                  className="inline-flex items-center space-x-0.5 text-[8px] sm:text-[9px] font-bold text-[#4ADE80] bg-[#22C55E]/15 border border-[#22C55E]/40 px-1.5 py-0.5 rounded-full font-mono shrink-0 cursor-pointer hover:bg-[#22C55E]/25 transition-colors"
                 >
                   <CheckCircle2 className="w-2.5 h-2.5 text-[#22C55E] fill-[#22C55E]/20" />
                   <span>{t('settings.verified', 'Verified')}</span>
                 </span>
               </div>
-              <div className="text-[9.5px] text-zinc-400 font-mono truncate max-w-[170px]">
+              <div className="text-[9.5px] sm:text-[11px] text-zinc-400 font-mono truncate max-w-[200px] sm:max-w-[320px]">
                 {email}
               </div>
             </div>
@@ -593,9 +590,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           <button
             type="button"
             onClick={() => setShowEditProfile(true)}
-            className="px-2.5 py-1.5 bg-[#22C55E]/15 hover:bg-[#22C55E]/25 border border-[#22C55E]/40 text-[#4ADE80] text-[10px] font-bold rounded-xl flex items-center space-x-1 transition-all cursor-pointer shrink-0 active:scale-95 shadow-[0_2px_10px_rgba(34,197,94,0.15)]"
+            className="px-3 py-1.5 sm:px-4 sm:py-2 bg-[#22C55E]/15 hover:bg-[#22C55E]/25 border border-[#22C55E]/40 text-[#4ADE80] text-[10.5px] sm:text-xs font-bold rounded-xl flex items-center space-x-1.5 transition-all cursor-pointer shrink-0 active:scale-95 shadow-[0_2px_10px_rgba(34,197,94,0.15)]"
           >
-            <Pencil className="w-3 h-3 text-[#4ADE80]" />
+            <Pencil className="w-3.5 h-3.5 text-[#4ADE80]" />
             <span>{t('settings.editProfile', 'Edit Profile')}</span>
           </button>
         </div>
@@ -603,15 +600,18 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
       {/* BODY CONTENT BELOW HEADER */}
       <div
-        className="flex-1 min-h-0 overflow-y-auto overscroll-y-contain px-3 py-3 space-y-3 pb-36 max-w-md mx-auto w-full"
+        className="flex-1 min-h-0 overflow-y-auto overscroll-y-contain px-3 sm:px-6 py-3 sm:py-5 pb-36 max-w-md md:max-w-5xl mx-auto w-full"
         style={{ WebkitOverflowScrolling: 'touch' }}
       >
         {/* 1. Subtitle */}
-        <div className="text-center pt-1">
-          <p className="text-[10.5px] text-zinc-400 font-normal">
+        <div className="text-center pb-2">
+          <p className="text-[11px] sm:text-xs text-zinc-400 font-normal">
             {t('settings.manageAccountPreferences', 'Manage your account and preferences')}
           </p>
         </div>
+
+        {/* Responsive Grid for Desktop / Stacked for Mobile */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 sm:gap-4">
 
       {/* 3. Section: APPEARANCE */}
       <div className="space-y-1">
@@ -696,7 +696,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   )}
                 </div>
                 <div className="text-[9.5px] text-zinc-400 font-mono truncate max-w-[200px]">
-                  {savedAddress ? `${String(savedAddress).slice(0, 8)}...${String(savedAddress).slice(-6)}` : t('settings.clickToAddAddress', 'Click to add single Polygon address')}
+                  {savedAddress ? `${savedAddress.slice(0, 8)}...${savedAddress.slice(-6)}` : t('settings.clickToAddAddress', 'Click to add single Polygon address')}
                 </div>
               </div>
             </div>
@@ -774,38 +774,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               )}
               <ChevronRight className="w-3.5 h-3.5 text-zinc-500 group-hover:text-zinc-300 shrink-0" />
             </div>
-          </div>
-
-          {/* Developer API */}
-          <div
-            id="developer-api-settings-btn"
-            onClick={() => {
-              if (onNavigateTab) {
-                onNavigateTab('developer');
-              } else if (onOpenApiConsole) {
-                onOpenApiConsole();
-              }
-            }}
-            className="p-2.5 flex items-center justify-between hover:bg-zinc-800/30 transition-colors cursor-pointer group"
-          >
-            <div className="flex items-center space-x-2.5">
-              <div className="w-7 h-7 rounded-full bg-[#0E2E21] border border-emerald-500/20 flex items-center justify-center text-[#00E575] shrink-0">
-                <Code2 className="w-3.5 h-3.5 text-[#00E575]" />
-              </div>
-              <div>
-                <div className="text-[11.5px] font-bold text-white group-hover:text-emerald-300 transition-colors flex items-center gap-1.5">
-                  Developer API
-                  <span className="text-[8.5px] bg-[#22C55E]/20 text-[#4ADE80] border border-[#22C55E]/40 px-1.5 py-0.2 rounded font-mono font-bold">
-                    Console
-                  </span>
-                </div>
-                <div className="text-[9.5px] text-zinc-400 font-normal">
-                  Manage projects, generate API keys, RPC endpoints & limits
-                </div>
-              </div>
-            </div>
-
-            <ChevronRight className="w-3.5 h-3.5 text-zinc-500 group-hover:text-zinc-300 shrink-0" />
           </div>
         </div>
       </div>
@@ -1038,34 +1006,36 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       </div>
 
       {/* 7. Section: ACCOUNT / ACCPORT (Log Out) */}
-      <div className="space-y-1">
+      <div className="space-y-1 md:col-span-2">
         <div className="text-[9px] uppercase tracking-wider font-bold text-zinc-500 px-1">
           {t('settings.account', 'ACCOUNT')}
         </div>
         <div
           onClick={() => signOutHandler && signOutHandler()}
-          className="bg-[#1A0A0F]/70 border border-rose-950/70 rounded-2xl p-2.5 flex items-center justify-between hover:bg-rose-950/40 transition-colors cursor-pointer group shadow-sm"
+          className="bg-[#1A0A0F]/70 border border-rose-950/70 rounded-2xl p-3 sm:p-4 flex items-center justify-between hover:bg-rose-950/40 transition-colors cursor-pointer group shadow-sm"
         >
-          <div className="flex items-center space-x-2.5">
-            <div className="w-7 h-7 rounded-full bg-rose-950/80 border border-rose-500/30 flex items-center justify-center text-rose-400 shrink-0">
-              <LogOut className="w-3.5 h-3.5 text-rose-400" />
+          <div className="flex items-center space-x-3">
+            <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-full bg-rose-950/80 border border-rose-500/30 flex items-center justify-center text-rose-400 shrink-0">
+              <LogOut className="w-4 h-4 text-rose-400" />
             </div>
             <div>
-              <div className="text-[11.5px] font-bold text-rose-400 group-hover:text-rose-300 transition-colors">
+              <div className="text-xs sm:text-sm font-bold text-rose-400 group-hover:text-rose-300 transition-colors">
                 {t('settings.logOut', 'Log Out')}
               </div>
-              <div className="text-[9.5px] text-zinc-400 font-normal">
+              <div className="text-[10px] sm:text-xs text-zinc-400 font-normal">
                 {t('settings.logOutDesc', 'Sign out from your account')}
               </div>
             </div>
           </div>
 
-          <ChevronRight className="w-3.5 h-3.5 text-rose-500/70 group-hover:text-rose-400 shrink-0" />
+          <ChevronRight className="w-4 h-4 text-rose-500/70 group-hover:text-rose-400 shrink-0" />
         </div>
       </div>
 
+      </div>
+
       {/* Footer text */}
-      <div className="text-[9px] text-zinc-600 font-mono text-center pt-2">
+      <div className="text-[9.5px] sm:text-xs text-zinc-600 font-mono text-center pt-3">
         {t('settings.versionFooter', 'TokenCare Security Dashboard v1.0.0')}
       </div>
 
@@ -1123,7 +1093,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       <img src={avatarUrl} alt="Avatar" className="w-full h-full object-cover" />
                     ) : (
                       <span className="font-bold text-xs text-emerald-400 font-mono">
-                        {String(displayName || username || 'W').slice(0, 2).toUpperCase()}
+                        {(displayName || username || 'W').slice(0, 2).toUpperCase()}
                       </span>
                     )}
                   </div>
@@ -1154,7 +1124,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 <label className="text-[10.5px] font-bold text-zinc-300">Display Name</label>
                 <input
                   type="text"
-                  value={displayName}
+                  value={displayName ?? ''}
                   onChange={(e) => setDisplayName(e.target.value)}
                   placeholder="Wisdom"
                   className="w-full bg-[#06080E] border border-zinc-800 text-white text-xs rounded-xl px-2.5 py-1.5 focus:outline-none focus:border-emerald-500 transition-colors"
@@ -1166,7 +1136,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 <label className="text-[10.5px] font-bold text-zinc-300">Username</label>
                 <input
                   type="text"
-                  value={username}
+                  value={username ?? ''}
                   onChange={(e) => setUsername(e.target.value)}
                   placeholder="username"
                   className="w-full bg-[#06080E] border border-zinc-800 text-white font-mono text-xs rounded-xl px-2.5 py-1.5 focus:outline-none focus:border-emerald-500 transition-colors"
@@ -1178,7 +1148,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 <label className="text-[10.5px] font-bold text-zinc-300">Email Address</label>
                 <input
                   type="email"
-                  value={email}
+                  value={email ?? ''}
                   disabled
                   className="w-full bg-zinc-950 border border-zinc-800/60 text-zinc-400 font-mono text-xs rounded-xl px-2.5 py-1.5 cursor-not-allowed opacity-80"
                 />
@@ -1261,7 +1231,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 </label>
                 <input
                   type="text"
-                  value={addressInput}
+                  value={addressInput ?? ''}
                   onChange={(e) => setAddressInput(e.target.value)}
                   placeholder="0x742d35Cc6634C0532925a3b844Bc454e4438f44e"
                   className="w-full bg-[#06080E] border border-zinc-800 text-white font-mono text-xs rounded-xl px-3 py-2 focus:outline-none focus:border-[#22C55E] transition-colors"
@@ -1503,7 +1473,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     inputMode="numeric"
                     autoComplete="one-time-code"
                     maxLength={6}
-                    value={mfaCodeInput}
+                    value={mfaCodeInput ?? ''}
                     onChange={(e) => setMfaCodeInput(e.target.value.replace(/\D/g, ''))}
                     placeholder="000000"
                     className="w-full bg-[#06080E] border border-zinc-800 text-white font-mono text-center text-lg tracking-[0.3em] font-black rounded-2xl py-2.5 focus:outline-none focus:border-[#00E575] focus:ring-1 focus:ring-[#00E575]/50 transition-all"
@@ -1620,7 +1590,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       inputMode="numeric"
                       autoComplete="one-time-code"
                       maxLength={6}
-                      value={mfaCodeInput}
+                      value={mfaCodeInput ?? ''}
                       onChange={(e) => setMfaCodeInput(e.target.value.replace(/\D/g, ''))}
                       placeholder="000000"
                       className="w-full bg-zinc-950 border border-zinc-800 text-white font-mono text-center text-sm tracking-[0.2em] font-bold rounded-xl py-2 focus:outline-none focus:border-rose-500 transition-colors"

@@ -18,7 +18,7 @@ import {
   ArrowUpRight,
   Bell,
   Terminal,
-  Code2,
+  X,
 } from 'lucide-react';
 
 import { ChainId, UserRewardWallet } from '../types';
@@ -39,7 +39,6 @@ interface SidebarProps {
   wallet: UserRewardWallet;
   onOpenWalletModal: () => void;
   onOpenRewardModal: () => void;
-  onOpenApiConsole?: () => void;
   unreadCount?: number;
   sessionStatus?: string;
   isOnline?: boolean;
@@ -59,7 +58,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
   wallet,
   onOpenWalletModal,
   onOpenRewardModal,
-  onOpenApiConsole,
   unreadCount = 0,
 }) => {
   const { t } = useTranslation();
@@ -72,9 +70,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const navItems = [
     {
       id: 'add-token',
-      label: t('nav.addToken'),
+      label: t('nav.donate', 'Donate'),
       icon: PlusCircle,
-      description: t('sidebar.addTokenDesc'),
+      description: t('sidebar.addTokenDesc', 'Submit contract address for donation verification'),
     },
     {
       id: 'directory',
@@ -89,22 +87,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
       description: t('sidebar.dashboardDesc'),
     },
     {
-      id: 'developer',
-      label: 'Developer API',
-      icon: Code2,
-      description: 'Manage projects, API keys, RPC endpoints & quotas',
-    },
-    {
       id: 'payouts',
       label: t('nav.payouts'),
       icon: ArrowUpRight,
       description: t('sidebar.payoutsDesc'),
-    },
-    {
-      id: 'notifications',
-      label: t('nav.notifications'),
-      icon: Bell,
-      description: t('sidebar.notificationsDesc'),
     },
     {
       id: 'mfa',
@@ -125,7 +111,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       {/* Mobile Backdrop Overlay */}
       {isOpen && (
         <div
-          className="fixed inset-0 bg-black/70 backdrop-blur-sm z-40 lg:hidden"
+          className="fixed inset-0 bg-black/70 backdrop-blur-sm z-40 md:hidden"
           onClick={onCloseMobile}
         />
       )}
@@ -134,7 +120,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       <aside
         className={`fixed top-0 bottom-0 left-0 z-40 bg-[#0B0E17] border-r border-zinc-800/90 flex flex-col justify-between transition-all duration-300 ${
           isCollapsed ? 'w-20' : 'w-64'
-        } ${isOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}`}
+        } ${isOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}`}
       >
         {/* Top Header & Brand */}
         <div>
@@ -142,6 +128,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <div className="flex items-center space-x-3 min-w-0">
               <TokenCareLogo size="md" showText={!isCollapsed} />
             </div>
+            {/* Close Button for mobile overlay drawer */}
+            <button
+              type="button"
+              onClick={onCloseMobile}
+              className="md:hidden p-1.5 text-zinc-400 hover:text-white bg-zinc-900 rounded-lg border border-zinc-800 cursor-pointer"
+              title="Close Navigation"
+            >
+              <X className="w-4 h-4" />
+            </button>
           </div>
 
           {/* Navigation Links */}
@@ -153,11 +148,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 <button
                   key={item.id}
                   onClick={() => {
-                    if (item.id === 'api-console' && onOpenApiConsole) {
-                      onOpenApiConsole();
-                    } else {
-                      onSelectTab(item.id);
-                    }
+                    onSelectTab(item.id);
                     onCloseMobile();
                   }}
                   className={`w-full text-left p-2.5 rounded-xl transition-all flex items-center space-x-3 cursor-pointer ${

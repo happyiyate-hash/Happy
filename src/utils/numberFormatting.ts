@@ -4,6 +4,41 @@ export { formatCurrencyService as formatCurrency };
 export type { FormatCurrencyOptions };
 
 /**
+ * Universal Compact Number Formatter:
+ * - 684 -> "684"
+ * - 1,000 -> "1K"
+ * - 1,500 -> "1.5K"
+ * - 10,000 -> "10K"
+ * - 1,000,000 -> "1M"
+ * - 2,500,000 -> "2.5M"
+ */
+export function formatCompactNumber(value: number | string | undefined | null): string {
+  const num = parseCleanNumber(value);
+  const isNegative = num < 0;
+  const absNum = Math.abs(num);
+
+  if (absNum < 1000) {
+    if (absNum % 1 === 0) {
+      return `${isNegative ? '-' : ''}${absNum.toLocaleString()}`;
+    }
+    return `${isNegative ? '-' : ''}${Number(absNum.toFixed(2)).toString()}`;
+  }
+
+  const units = ['K', 'M', 'B', 'T'];
+  let n = absNum;
+  let unit = -1;
+
+  while (n >= 1000 && unit < units.length - 1) {
+    n /= 1000;
+    unit += 1;
+  }
+
+  const rounded = Math.round(n * 10) / 10;
+  const formatted = rounded % 1 === 0 ? rounded.toFixed(0) : rounded.toFixed(1);
+  return `${isNegative ? '-' : ''}${formatted}${units[unit]}`;
+}
+
+/**
  * Universal Number & Currency Formatting Utilities
  * Supports intelligent compact formatting (K, M, B, T) and zero-safe handling.
  */

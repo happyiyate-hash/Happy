@@ -45,15 +45,17 @@ import { HelpCenterView } from './HelpCenterView';
 import { ContactSupportView } from './ContactSupportView';
 import { SupportLiveChatView } from './SupportLiveChatView';
 import { TermsAndPrivacyView } from './TermsAndPrivacyView';
-import DeveloperView from '../views/DeveloperView';
 import { LogoVerificationReport } from '../services/logoVerificationEngine';
 import { MfaManagementView } from './MfaManagementView';
+import { MySavedTokensView } from './MySavedTokensView';
 import { TokenCareLogo } from './TokenCareLogo';
 import { NotificationBell } from './NotificationBell';
 import { CompactBalanceCard } from './CompactBalanceCard';
 import { PromoCarousel } from './PromoCarousel';
 
 import { NotificationCenterView } from './NotificationCenterView';
+import { FloatingSavedTokensBadge } from './FloatingSavedTokensBadge';
+import { getLocalSavedTokens } from '../services/tokenBatchVerificationService';
 import { TickerNumber } from './TickerNumber';
 import { formatSmartCurrency, formatSmartNumber } from '../utils/numberFormatting';
 
@@ -91,12 +93,11 @@ interface MobileViewProps {
   onOpenHowItWorks: () => void;
   onOpenRewardModal: () => void;
   onOpenWalletModal: () => void;
-  onSwitchToDesktop: () => void;
+  onSwitchToDesktop?: () => void;
   unreadCount?: number;
   onUnreadCountChange?: (count: number) => void;
   isVerifying?: boolean;
   verificationStage?: number;
-  onOpenApiConsole?: () => void;
 }
 
 export const MobileView: React.FC<MobileViewProps> = ({
@@ -135,32 +136,43 @@ export const MobileView: React.FC<MobileViewProps> = ({
   onUnreadCountChange,
   isVerifying = false,
   verificationStage = 4,
-  onOpenApiConsole,
 }) => {
   const { t } = useTranslation();
   // Set mobile top status bar color to match top header background (#090C13)
   useStatusBarColor('#090C13');
 
-  // Mobile navigation tabs: 'overview', 'explore', 'donate', 'tokens', 'profile', 'withdrawals', 'notifications', 'mfa', 'help-center', 'contact-support', 'terms-privacy', 'privacy-policy', 'preferences', 'developer', 'api-console'
+  // Mobile navigation tabs
   const [mobileTab, setMobileTab] = useState<
-    'overview' | 'explore' | 'donate' | 'tokens' | 'profile' | 'withdrawals' | 'notifications' | 'mfa' | 'help-center' | 'contact-support' | 'support-chat' | 'live-chat' | 'terms-privacy' | 'privacy-policy' | 'preferences' | 'developer' | 'api-console'
+    'overview' | 'explore' | 'donate' | 'tokens' | 'saved-tokens' | 'my-saved-list' | 'profile' | 'withdrawals' | 'notifications' | 'mfa' | 'help-center' | 'contact-support' | 'terms-privacy' | 'privacy-policy' | 'preferences'
   >('overview');
   const [showBalance, setShowBalance] = useState<boolean>(true);
   const [dbWithdrawals, setDbWithdrawals] = useState<WithdrawalRequest[]>([]);
+  const [savedTokensCount, setSavedTokensCount] = useState<number>(() => getLocalSavedTokens(currentUser?.id).length);
+
+  useEffect(() => {
+    const updateCount = () => {
+      setSavedTokensCount(getLocalSavedTokens(currentUser?.id).length);
+    };
+
+    updateCount();
+    window.addEventListener('tokencare_saved_tokens_updated', updateCount);
+    window.addEventListener('storage', updateCount);
+
+    return () => {
+      window.removeEventListener('tokencare_saved_tokens_updated', updateCount);
+      window.removeEventListener('storage', updateCount);
+    };
+  }, [currentUser?.id]);
 
   // Sync mobile tab selection
   const handleTabChange = (
-    tab: 'overview' | 'explore' | 'donate' | 'tokens' | 'profile' | 'withdrawals' | 'notifications' | 'mfa' | 'help-center' | 'contact-support' | 'support-chat' | 'live-chat' | 'terms-privacy' | 'privacy-policy' | 'preferences' | 'developer' | 'api-console'
+    tab: 'overview' | 'explore' | 'donate' | 'tokens' | 'saved-tokens' | 'my-saved-list' | 'profile' | 'withdrawals' | 'notifications' | 'mfa' | 'help-center' | 'contact-support' | 'terms-privacy' | 'privacy-policy' | 'preferences'
   ) => {
-    if (tab === 'developer' || tab === 'api-console') {
-      setMobileTab('developer');
-      setActiveTab('api-console');
-      return;
-    }
     setMobileTab(tab);
     if (tab === 'overview') setActiveTab('dashboard');
     else if (tab === 'donate') setActiveTab('add-token');
     else if (tab === 'tokens') setActiveTab('dashboard');
+    else if (tab === 'saved-tokens' || tab === 'my-saved-list') setActiveTab('add-token');
     else if (tab === 'explore') setActiveTab('directory');
     else if (tab === 'withdrawals') setActiveTab('payouts');
     else if (tab === 'profile') setActiveTab('settings');
@@ -184,7 +196,6 @@ export const MobileView: React.FC<MobileViewProps> = ({
     else if (activeTab === 'contact-support' && mobileTab !== 'contact-support') setMobileTab('contact-support');
     else if ((activeTab === 'terms-privacy' || activeTab === 'privacy-policy') && mobileTab !== 'terms-privacy') setMobileTab('terms-privacy');
     else if (activeTab === 'preferences' && mobileTab !== 'preferences') setMobileTab('preferences');
-    else if ((activeTab === 'api-console' || activeTab === 'developer') && mobileTab !== 'developer') setMobileTab('developer');
     else if (activeTab === 'dashboard' && mobileTab !== 'overview' && mobileTab !== 'tokens') {
       setMobileTab('overview');
     }
@@ -248,7 +259,7 @@ export const MobileView: React.FC<MobileViewProps> = ({
       items.push({
         id: `wtx-${w.id}`,
         title,
-        subtitle: w.wallet_address ? `${String(w.wallet_address).slice(0, 6)}...${String(w.wallet_address).slice(-4)}` : 'EVM Wallet',
+        subtitle: w.wallet_address ? `${w.wallet_address.slice(0, 6)}...${w.wallet_address.slice(-4)}` : 'EVM Wallet',
         amount: `-${w.amount_usd ? w.amount_usd.toFixed(2) : (w.amount_tokens * 0.001).toFixed(2)} USDT`,
         amountColor: isFailed ? 'text-rose-400 font-mono' : 'text-white font-mono',
         timeAgo: formatTimeAgo(w.created_at),
@@ -300,6 +311,8 @@ export const MobileView: React.FC<MobileViewProps> = ({
         mobileTab !== 'notifications' &&
         mobileTab !== 'donate' &&
         mobileTab !== 'tokens' &&
+        mobileTab !== 'saved-tokens' &&
+        mobileTab !== 'my-saved-list' &&
         mobileTab !== 'profile' &&
         mobileTab !== 'mfa' &&
         mobileTab !== 'explore' &&
@@ -309,9 +322,7 @@ export const MobileView: React.FC<MobileViewProps> = ({
         mobileTab !== 'live-chat' &&
         mobileTab !== 'terms-privacy' &&
         mobileTab !== 'privacy-policy' &&
-        mobileTab !== 'preferences' &&
-        mobileTab !== 'developer' &&
-        mobileTab !== 'api-console' && (
+        mobileTab !== 'preferences' && (
           <header className="shrink-0 z-40 bg-[#090C12] backdrop-blur-xl border-b border-emerald-500/30 rounded-b-2xl p-2.5 pt-safe-nav shadow-[0_4px_25px_rgba(0,0,0,0.7)] max-w-md mx-auto w-full transition-all flex items-center justify-between">
             {/* Left: TokenCare Logo (~42px) */}
             <div className="flex items-center space-x-2">
@@ -441,12 +452,12 @@ export const MobileView: React.FC<MobileViewProps> = ({
                         {token.metadata?.logoUrl ? (
                           <img
                             src={token.metadata.logoUrl}
-                            alt={token.metadata?.symbol || 'Token'}
+                            alt={token.metadata.symbol}
                             className="w-7 h-7 rounded-lg object-cover shrink-0 border border-emerald-500/30"
                           />
                         ) : (
                           <div className="w-7 h-7 rounded-lg bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold text-[10px] shrink-0">
-                            {String(token.metadata?.symbol || 'TC').slice(0, 3)}
+                            {token.metadata?.symbol?.slice(0, 3) || 'TC'}
                           </div>
                         )}
                         <div>
@@ -510,7 +521,20 @@ export const MobileView: React.FC<MobileViewProps> = ({
             isSavingToken={isSavingToken}
             isVerifying={isVerifying}
             verificationStage={verificationStage}
+            userId={currentUser?.id}
+            onOpenSavedTokens={() => handleTabChange('saved-tokens')}
           />
+        )}
+
+        {/* DEDICATED SAVED TOKENS STANDALONE PAGE (No Bottom Navigation) */}
+        {(mobileTab === 'saved-tokens' || mobileTab === 'my-saved-list') && (
+          <div className="flex-1 min-h-0 w-full h-full flex flex-col overflow-hidden animate-in fade-in duration-200">
+            <MySavedTokensView
+              userId={currentUser?.id}
+              onBackToDonate={() => handleTabChange('donate')}
+              onNavigateAddToken={() => handleTabChange('donate')}
+            />
+          </div>
         )}
 
         {/* TOKENS / EXPLORER TAB */}
@@ -549,15 +573,7 @@ export const MobileView: React.FC<MobileViewProps> = ({
               onSignOut={handleSignOut}
               handleSignOut={handleSignOut}
               onNavigateTab={(tab) => handleTabChange(tab as any)}
-              onOpenApiConsole={onOpenApiConsole || (() => handleTabChange('developer'))}
             />
-          </div>
-        )}
-
-        {/* DEVELOPER / WORKER API STANDALONE VIEW */}
-        {(mobileTab === 'developer' || mobileTab === 'api-console') && (
-          <div className="flex-1 min-h-0 w-full h-full flex flex-col overflow-hidden animate-in fade-in duration-200">
-            <DeveloperView onBack={() => handleTabChange('profile')} />
           </div>
         )}
 
@@ -639,9 +655,11 @@ export const MobileView: React.FC<MobileViewProps> = ({
         )}
       </main>
 
-      {/* Fixed Bottom Navigation Bar (Hidden when on standalone sub-pages / Support pages / Developer workspace) */}
+      {/* Fixed Bottom Navigation Bar (Hidden when on standalone sub-pages / Support pages / Saved Tokens page) */}
       {mobileTab !== 'withdrawals' &&
         mobileTab !== 'notifications' &&
+        mobileTab !== 'saved-tokens' &&
+        mobileTab !== 'my-saved-list' &&
         mobileTab !== 'mfa' &&
         mobileTab !== 'help-center' &&
         mobileTab !== 'contact-support' &&
@@ -649,9 +667,7 @@ export const MobileView: React.FC<MobileViewProps> = ({
         mobileTab !== 'live-chat' &&
         mobileTab !== 'terms-privacy' &&
         mobileTab !== 'privacy-policy' &&
-        mobileTab !== 'preferences' &&
-        mobileTab !== 'developer' &&
-        mobileTab !== 'api-console' && (
+        mobileTab !== 'preferences' && (
         <nav className="shrink-0 z-50 bg-[#090C12] backdrop-blur-xl border-t border-zinc-800/80 rounded-t-3xl px-3 pt-2.5 pb-safe-nav shadow-[0_-8px_30px_rgba(0,0,0,0.6)]">
           <div className="max-w-md mx-auto grid grid-cols-5 items-center justify-items-center relative">
             {/* 1. Overview */}
@@ -718,6 +734,13 @@ export const MobileView: React.FC<MobileViewProps> = ({
           </button>
         </div>
       </nav>
+      )}
+      {/* Floating Draggable Saved Tokens Circle Indicator */}
+      {mobileTab !== 'saved-tokens' && mobileTab !== 'my-saved-list' && savedTokensCount > 0 && (
+        <FloatingSavedTokensBadge
+          count={savedTokensCount}
+          onClick={() => handleTabChange('saved-tokens')}
+        />
       )}
     </div>
   );

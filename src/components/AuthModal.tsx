@@ -270,8 +270,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               <ShieldCheck className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="text-base font-bold text-white">Supabase Developer Auth</h3>
-              <p className="text-xs text-zinc-400">Cloud database user session</p>
+              <h3 className="text-base font-bold text-white">Cloud Authentication</h3>
+              <p className="text-xs text-zinc-400">Database user session</p>
             </div>
           </div>
           <button
@@ -295,7 +295,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   />
                 ) : (
                   <div className="w-full h-full bg-zinc-950 rounded-[14px] flex items-center justify-center text-emerald-400 font-bold text-lg">
-                    {String(currentUser?.email || currentUser?.user_metadata?.username || 'U').charAt(0).toUpperCase()}
+                    {currentUser.email?.[0]?.toUpperCase() || 'U'}
                   </div>
                 )}
               </div>
@@ -305,7 +305,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 </div>
                 <div className="text-sm font-bold text-white truncate">{currentUser.email}</div>
                 <div className="text-[11px] text-zinc-400 font-mono">
-                  ID: {String(currentUser?.id || '').slice(0, 8)}...
+                  ID: {currentUser.id?.slice(0, 8)}...
                 </div>
               </div>
             </div>
