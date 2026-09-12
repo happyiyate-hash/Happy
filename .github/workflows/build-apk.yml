@@ -1,26 +1,36 @@
-name: Build Android APK
+name: Build & Release Optimized Android APK
 
 on:
   push:
     branches: [ main, master ]
   workflow_dispatch:
+    inputs:
+      compress_level:
+        description: 'Asset compression intensity'
+        required: false
+        default: 'maximum'
+        type: choice
+        options:
+          - maximum
+          - standard
 
 jobs:
-  build:
+  build-release:
+    name: Build & Compress Release APK
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v5
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v5
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
 
       - name: Setup Java JDK 21
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '21'
@@ -34,21 +44,164 @@ jobs:
         with:
           validate-wrappers: false
 
-      - name: Install Node Dependencies
-        run: npm install
+      - name: Install Image Optimization & Compression Utilities
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y pngquant optipng zip zipalign
 
-      - name: Build Web Bundle & Sync Capacitor Android
+      - name: Install Node Dependencies
+        run: npm ci || npm install
+
+      - name: Compress Brand & Visual PNG Assets (Pre-build Shrinking)
+        run: |
+          echo "Compressing brand PNG resources to minimize APK size..."
+          # Compress resources/ directory icons and splash screens
+          if [ -d "resources" ]; then
+            pngquant --quality=65-85 --strip --skip-if-larger --force --ext .png resources/*.png || true
+            optipng -o5 resources/*.png || true
+          fi
+          # Compress public/ directory PNG assets
+          if [ -d "public" ]; then
+            pngquant --quality=65-85 --strip --skip-if-larger --force --ext .png public/*.png || true
+            optipng -o5 public/*.png || true
+          fi
+
+      - name: Clean Previous Stale Mobile Assets
+        run: |
+          rm -rf android/app/src/main/assets/public/*
+
+      - name: Build Production Web Bundle & Sync Capacitor
         run: npm run cap:build
 
-      - name: Build Debug APK
+      - name: Strip Non-Mobile Server Artifacts & Sourcemaps from Android Bundle
+        run: |
+          # Remove server bundles, node scripts, and map files from mobile assets
+          rm -f android/app/src/main/assets/public/server.cjs*
+          find android/app/src/main/assets/public -name "*.map" -delete || true
+
+      - name: Compress Native Android Res Drawables
+        run: |
+          # Optimize all generated Android drawable / mipmap PNGs
+          echo "Compressing native Android drawables..."
+          find android/app/src/main/res -name "*.png" -exec pngquant --quality=70-85 --strip --skip-if-larger --force --ext .png {} + || true
+
+      - name: Setup or Generate Release Keystore
+        id: keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD || 'tokencare_release_secret_2026' }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS || 'tokencare' }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD || secrets.KEYSTORE_PASSWORD || 'tokencare_release_secret_2026' }}
+        run: |
+          mkdir -p android/app
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "Decoding release keystore from secrets..."
+            echo "$KEYSTORE_BASE64" | base64 -d > android/app/release.keystore
+          else
+            echo "Generating production 2048-bit RSA release keystore..."
+            keytool -genkeypair -v \
+              -keystore android/app/release.keystore \
+              -alias "$KEY_ALIAS" \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -storepass "$KEYSTORE_PASSWORD" \
+              -keypass "$KEY_PASSWORD" \
+              -dname "CN=TokenCare Mobile, OU=Release, O=TokenCare, L=London, ST=London, C=GB"
+          fi
+          echo "Keystore verified at android/app/release.keystore"
+          keytool -list -v -keystore android/app/release.keystore -storepass "$KEYSTORE_PASSWORD" | grep "SHA256:" || true
+
+      - name: Build Optimized Android Release APK
         working-directory: android
+        env:
+          KEYSTORE_PATH: "release.keystore"
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD || 'tokencare_release_secret_2026' }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS || 'tokencare' }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD || secrets.KEYSTORE_PASSWORD || 'tokencare_release_secret_2026' }}
         run: |
           chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon
+          ./gradlew assembleRelease --no-daemon --stacktrace
 
-      - name: Upload APK Artifact
+      - name: Organize & Compress Release APKs
+        run: |
+          mkdir -p release-apk-artifacts
+          OUTPUT_DIR="android/app/build/outputs/apk/release"
+          
+          # Copy all generated APKs
+          cp $OUTPUT_DIR/*.apk release-apk-artifacts/
+          
+          cd release-apk-artifacts
+          
+          # Rename to clear, recognizable names
+          if [ -f "app-universal-release.apk" ]; then
+            cp "app-universal-release.apk" "TokenCare-Universal-Release.apk"
+          fi
+          if [ -f "app-arm64-v8a-release.apk" ]; then
+            cp "app-arm64-v8a-release.apk" "TokenCare-arm64-v8a-Release-UltraSmall.apk"
+          fi
+          if [ -f "app-armeabi-v7a-release.apk" ]; then
+            cp "app-armeabi-v7a-release.apk" "TokenCare-armeabi-v7a-Release.apk"
+          fi
+          if [ -f "app-release.apk" ]; then
+            cp "app-release.apk" "TokenCare-Release.apk"
+          fi
+
+          # Create maximum-compression zip bundle containing all release APKs
+          zip -9 -r TokenCare-Release-APKs-Compressed.zip *.apk
+          
+          # Print size summary
+          echo "=== APK File Size Summary ==="
+          ls -lh *.apk *.zip
+
+      - name: Output Build Summary & Size Breakdown
+        run: |
+          echo "### 🚀 TokenCare Android Release APK Build" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Artifact Name | Size | Target Architecture | Description |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|---|---|" >> $GITHUB_STEP_SUMMARY
+          cd release-apk-artifacts
+          for f in *.apk; do
+            if [ -f "$f" ]; then
+              SIZE=$(ls -lh "$f" | awk '{print $5}')
+              ARCH="Universal / All"
+              DESC="Compatible with all Android devices"
+              if [[ "$f" == *"arm64-v8a"* ]]; then
+                ARCH="arm64-v8a (64-bit)"
+                DESC="Ultra-small, high-performance for modern smartphones (Android 9+)"
+              elif [[ "$f" == *"armeabi-v7a"* ]]; then
+                ARCH="armeabi-v7a (32-bit)"
+                DESC="Compact build for older 32-bit smartphones"
+              elif [[ "$f" == *"x86"* ]]; then
+                ARCH="x86 / Emulators"
+                DESC="Built for x86 chips and Chromebooks"
+              fi
+              echo "| \`$f\` | **$SIZE** | $ARCH | $DESC |" >> $GITHUB_STEP_SUMMARY
+            fi
+          done
+          if [ -f "TokenCare-Release-APKs-Compressed.zip" ]; then
+            ZIP_SIZE=$(ls -lh "TokenCare-Release-APKs-Compressed.zip" | awk '{print $5}')
+            echo "| \`TokenCare-Release-APKs-Compressed.zip\` | **$ZIP_SIZE** | Multi-Architecture Bundle | Maximum zip compressed release package |" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Upload Universal Release APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: TokenCare-Android-APK
-          path: android/app/build/outputs/apk/debug/app-debug.apk
-          retention-days: 14
+          name: TokenCare-Universal-Release-APK
+          path: release-apk-artifacts/TokenCare-Universal-Release.apk
+          retention-days: 30
+
+      - name: Upload Ultra-Small arm64 Release APK Artifact
+        uses: actions/upload-artifact@v4
+        if: hashFiles('release-apk-artifacts/TokenCare-arm64-v8a-Release-UltraSmall.apk') != ''
+        with:
+          name: TokenCare-arm64-UltraSmall-Release-APK
+          path: release-apk-artifacts/TokenCare-arm64-v8a-Release-UltraSmall.apk
+          retention-days: 30
+
+      - name: Upload All Compressed Release APKs Bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: TokenCare-Release-APKs-Bundle-Compressed
+          path: release-apk-artifacts/TokenCare-Release-APKs-Compressed.zip
+          retention-days: 30

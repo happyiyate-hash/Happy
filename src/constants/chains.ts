@@ -524,6 +524,58 @@ export const RAW_EVM_CHAINS: Record<string, EVMChainDefinition> = {
     dexScreenerChain: "robinhood",
     coingeckoPlatform: "robinhood",
     explorer: "https://explorer.robinhood.com"
+  },
+  solana: {
+    name: "Solana",
+    symbol: "SOL",
+    chainId: 1399811149,
+    rpcUrl: "https://api.mainnet-beta.solana.com",
+    coingeckoId: "solana",
+    themeColor: "#14F195",
+    type: "evm",
+    provider: "infura",
+    dexScreenerChain: "solana",
+    coingeckoPlatform: "solana",
+    explorer: "https://solscan.io"
+  },
+  tron: {
+    name: "TRON",
+    symbol: "TRX",
+    chainId: 728126428,
+    rpcUrl: "https://api.trongrid.io",
+    coingeckoId: "tron",
+    themeColor: "#FF060A",
+    type: "evm",
+    provider: "infura",
+    dexScreenerChain: "tron",
+    coingeckoPlatform: "tron",
+    explorer: "https://tronscan.org"
+  },
+  ton: {
+    name: "TON Network",
+    symbol: "TON",
+    chainId: 607,
+    rpcUrl: "https://toncenter.com/api/v2/jsonRPC",
+    coingeckoId: "the-open-network",
+    themeColor: "#0088CC",
+    type: "evm",
+    provider: "infura",
+    dexScreenerChain: "ton",
+    coingeckoPlatform: "the-open-network",
+    explorer: "https://tonscan.org"
+  },
+  xrpl: {
+    name: "XRP Ledger",
+    symbol: "XRP",
+    chainId: 144,
+    rpcUrl: "https://s1.ripple.com:51234",
+    coingeckoId: "ripple",
+    themeColor: "#23292F",
+    type: "evm",
+    provider: "infura",
+    dexScreenerChain: "xrpl",
+    coingeckoPlatform: "xrp",
+    explorer: "https://xrpscan.com"
   }
 };
 
@@ -590,9 +642,19 @@ const NAME_ALIAS_MAP: Record<string, string> = {
   ripple: "xrpl",
   solana: "solana",
   sol: "solana",
+  "mainnet-beta": "solana",
+  "mainnet_beta": "solana",
+  "solana-mainnet": "solana",
+  "solanamainnet": "solana",
+  "solana-mainnet-beta": "solana",
+  spl: "solana",
   tron: "tron",
   trx: "tron",
+  trc20: "tron",
+  "trc-20": "tron",
   ton: "ton",
+  "ton-network": "ton",
+  jetton: "ton",
   sui: "sui",
   aptos: "aptos",
 };
@@ -602,7 +664,15 @@ const NAME_ALIAS_MAP: Record<string, string> = {
  */
 export function registerDynamicChain(
   chainIdKey: string,
-  chainName?: string,
+  chainNameOrOptions?: string | {
+    name?: string;
+    symbol?: string;
+    type?: string;
+    themeColor?: string;
+    dexScreenerChain?: string;
+    logoUrl?: string;
+    explorer?: string;
+  },
   symbol?: string,
   logoUrl?: string,
   explorer?: string
@@ -616,18 +686,28 @@ export function registerDynamicChain(
     return getChainInfo(existingKey);
   }
 
-  let formattedName = chainName;
+  let formattedName = typeof chainNameOrOptions === 'object' ? chainNameOrOptions.name : chainNameOrOptions;
+  let formattedSymbol = typeof chainNameOrOptions === 'object' ? chainNameOrOptions.symbol : symbol;
+  const chainThemeColor = typeof chainNameOrOptions === 'object' ? chainNameOrOptions.themeColor : '#333333';
+  const chainType = typeof chainNameOrOptions === 'object' && chainNameOrOptions.type === 'other' ? 'other' : 'evm';
+  const dexScreenerChain = typeof chainNameOrOptions === 'object' && chainNameOrOptions.dexScreenerChain ? chainNameOrOptions.dexScreenerChain : cleanKey;
+  const explorerUrl = typeof chainNameOrOptions === 'object' && chainNameOrOptions.explorer ? chainNameOrOptions.explorer : (explorer || `https://etherscan.io`);
+
   if (!formattedName) {
     if (cleanKey === 'bsc' || cleanKey === '56') formattedName = 'Binance Smart Chain';
     else if (cleanKey === 'fantom' || cleanKey === '250') formattedName = 'Fantom Opera';
     else if (cleanKey === 'pulsechain' || cleanKey === '369') formattedName = 'PulseChain';
     else if (cleanKey === 'cronos' || cleanKey === '25') formattedName = 'Cronos';
-    else if (cleanKey === 'solana') formattedName = 'Solana';
-    else if (cleanKey === 'tron') formattedName = 'TRON Network';
+    else if (cleanKey === 'solana' || cleanKey === 'mainnet-beta' || cleanKey === 'spl') formattedName = 'Solana';
+    else if (cleanKey === 'tron' || cleanKey === 'trx') formattedName = 'TRON';
+    else if (cleanKey === 'ton') formattedName = 'TON Network';
+    else if (cleanKey === 'xrpl' || cleanKey === 'xrp') formattedName = 'XRP Ledger';
     else formattedName = cleanKey.charAt(0).toUpperCase() + cleanKey.slice(1);
   }
 
-  const formattedSymbol = symbol ? String(symbol).toUpperCase() : (cleanKey.includes('bsc') || cleanKey === '56' ? 'BNB' : cleanKey ? cleanKey.toUpperCase().slice(0, 4) : 'EVM');
+  if (!formattedSymbol) {
+    formattedSymbol = (cleanKey.includes('bsc') || cleanKey === '56' ? 'BNB' : cleanKey.toUpperCase().slice(0, 4));
+  }
 
   RAW_EVM_CHAINS[cleanKey] = {
     name: formattedName,
@@ -635,12 +715,12 @@ export function registerDynamicChain(
     chainId: Number(cleanKey) || 9999,
     rpcUrl: `https://rpc.ankr.com/${cleanKey}`,
     coingeckoId: cleanKey,
-    themeColor: '#333333',
-    type: 'evm',
+    themeColor: chainThemeColor || '#333333',
+    type: chainType as any,
     provider: 'infura',
-    dexScreenerChain: cleanKey,
+    dexScreenerChain: dexScreenerChain,
     coingeckoPlatform: cleanKey,
-    explorer: explorer || `https://etherscan.io`,
+    explorer: explorerUrl,
   };
 
   NAME_ALIAS_MAP[cleanKey] = cleanKey;
@@ -910,8 +990,75 @@ export function validateTonAddress(address: string): { isValid: boolean; error?:
 }
 
 /**
+ * Checks if an address matches Polkadot / Substrate SS58 format or Asset Hub identifier
+ * Examples:
+ * - Polkadot Mainnet: 1FRMM8PEiWXYax7rpS6X4XZX1aAAxSWx1CrKTyrVYhV24fg
+ * - Substrate Generic: 5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY
+ * - Kusama: D..., E..., F..., G..., H..., J...
+ * - Substrate Asset Hub ID: polkadot:1984, 1984 (numeric with chain context)
+ */
+export function isPolkadotAddress(address: string): boolean {
+  if (!address) return false;
+  const clean = address.trim();
+  if (clean.startsWith('0x')) return false;
+
+  // Substrate SS58 address: 47-48 characters Base58 starting with 1, 5, or Kusama prefixes
+  if (/^[1-9A-HJ-NP-Za-km-z]{47,49}$/.test(clean) && /^[15C-Zc-z]/.test(clean)) {
+    return true;
+  }
+
+  // Polkadot / Substrate Asset Hub prefix notation: e.g. "polkadot:1984", "statemint:1337", "dot:1984"
+  if (/^(polkadot|substrate|kusama|statemint|assethub|dot):[0-9a-zA-Z_-]+$/i.test(clean)) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Validates Polkadot / Substrate address or asset identifier format
+ */
+export function validatePolkadotAddress(address: string): { isValid: boolean; error?: string } {
+  const clean = address.trim();
+  if (isPolkadotAddress(clean) || (clean.length >= 1 && !clean.startsWith('0x'))) {
+    return { isValid: true };
+  }
+  return {
+    isValid: false,
+    error: `Invalid Polkadot/Substrate asset identifier "${address}". Expected SS58 address (47-48 characters) or Asset Hub identifier.`,
+  };
+}
+
+/**
+ * Checks if an address matches Cosmos SDK / IBC bech32 format
+ */
+export function isCosmosAddress(address: string): boolean {
+  if (!address) return false;
+  const clean = address.trim().toLowerCase();
+  return /^(cosmos|osmo|inj|celestia|sei|kujira|secret|dydx|stars|juno|stride|atom|terra|axelar)1[0-9a-z]{38,58}$/.test(clean);
+}
+
+/**
+ * Checks if an address matches NEAR Protocol format (e.g. token.near or 64-hex account)
+ */
+export function isNearAddress(address: string): boolean {
+  if (!address) return false;
+  const clean = address.trim().toLowerCase();
+  return clean.endsWith('.near') || (/^[0-9a-f]{64}$/.test(clean) && !clean.startsWith('0x'));
+}
+
+/**
+ * Checks if an address matches Aptos or Sui Move package / struct identifier
+ */
+export function isAptosOrSuiAddress(address: string): boolean {
+  if (!address) return false;
+  const clean = address.trim();
+  return /^0x[0-9a-fA-F]{1,64}(::[a-zA-Z0-9_]+){1,3}$/.test(clean) || (/^0x[0-9a-fA-F]{64}$/.test(clean));
+}
+
+/**
  * Validates a token identifier according to its blockchain type.
- * EVM address format validation is ONLY applied when blockchainType/chainId is EVM.
+ * EVM address format validation is ONLY applied when blockchainType/chainId is EVM and not an explicit non-EVM identifier.
  */
 export function validateTokenIdentifier(
   blockchainTypeOrChainId: string,
@@ -921,7 +1068,7 @@ export function validateTokenIdentifier(
   const address = String(contractAddress || '').trim();
 
   if (!address) {
-    return { isValid: false, error: 'Token address is required.' };
+    return { isValid: false, error: 'Token address or asset identifier is required.' };
   }
 
   const bType = (blockchainType || blockchainTypeOrChainId || '').toLowerCase().trim();
@@ -946,21 +1093,45 @@ export function validateTokenIdentifier(
     return validateTronAddress(address);
   }
 
-  // 5. EVM Validation
+  // 5. Polkadot / Substrate Validation
+  if (bType === 'polkadot' || bType === 'substrate' || bType === 'kusama' || isPolkadotAddress(address)) {
+    return validatePolkadotAddress(address);
+  }
+
+  // 6. Cosmos / IBC Validation
+  if (bType === 'cosmos' || bType === 'osmosis' || isCosmosAddress(address)) {
+    return { isValid: true };
+  }
+
+  // 7. Aptos / Sui / NEAR Validation
+  if (isAptosOrSuiAddress(address) || isNearAddress(address)) {
+    return { isValid: true };
+  }
+
+  // 8. EVM Validation (Only when strictly EVM and not a recognized non-EVM format or short identifier)
   const isEvm = isEvmChain(blockchainTypeOrChainId, bType);
-  if (isEvm && !isTonAddress(address) && !isSolanaAddress(address) && !isTronAddress(address) && !isXrplAddress(address)) {
+  const isKnownNonEvm = isTonAddress(address) || isSolanaAddress(address) || isTronAddress(address) || isXrplAddress(address) || isPolkadotAddress(address) || isCosmosAddress(address) || isNearAddress(address);
+
+  if (isEvm && !isKnownNonEvm) {
     if (!/^0x[a-fA-F0-9]{40}$/.test(address)) {
+      // If the address is a single character, single number (e.g. '0', '1'), letter ('A'), asset ID, or short non-0x40 identifier, allow through to auto-detect pipeline
+      if (address.length >= 1 && !address.startsWith('0x')) {
+        return { isValid: true }; // Allow through to auto-detect pipeline
+      }
+      if (address.startsWith('0x') && address.length >= 1) {
+        return { isValid: true }; // Short hex/precompile identifier
+      }
       return {
         isValid: false,
-        error: `Invalid EVM contract address format "${address}". Must start with 0x followed by 40 hex characters.`,
+        error: `Invalid contract address format "${address}". Expected contract address or asset identifier.`,
       };
     }
     return { isValid: true };
   }
 
-  // Generic non-EVM fallback
-  if (address.length < 3) {
-    return { isValid: false, error: 'Token identifier is too short.' };
+  // Generic non-EVM fallback (Unknown blockchain != invalid asset)
+  if (address.length < 1) {
+    return { isValid: false, error: 'Token address or asset identifier is required.' };
   }
 
   return { isValid: true };
@@ -1030,19 +1201,25 @@ export function isChainEnabledByKeys(chainKey: string, apiKeys: ApiKeyConfig): b
 }
 
 function getChainIcon(symbol: string, name: string): string {
-  if (name.includes('Polygon')) return '💜';
-  if (name.includes('Ethereum')) return '💎';
-  if (name.includes('Base')) return '🔵';
-  if (name.includes('Arbitrum')) return '💙';
-  if (name.includes('Optimism')) return '🔴';
-  if (name.includes('BSC') || name.includes('BNB')) return '🟡';
-  if (name.includes('Avalanche')) return '🔺';
-  if (name.includes('Celo')) return '🟢';
-  if (name.includes('Berachain')) return '🐻';
-  if (name.includes('Zora')) return '🔮';
-  if (name.includes('Sei')) return '🔴';
-  if (name.includes('Sonic')) return '⚡';
-  if (name.includes('Ape')) return '🐵';
+  const lowerName = (name || '').toLowerCase();
+  const lowerSym = (symbol || '').toLowerCase();
+  if (lowerName.includes('solana') || lowerSym === 'sol') return '🟣';
+  if (lowerName.includes('polygon') || lowerSym === 'pol' || lowerSym === 'matic') return '💜';
+  if (lowerName.includes('ethereum') || lowerSym === 'eth') return '💎';
+  if (lowerName.includes('base')) return '🔵';
+  if (lowerName.includes('arbitrum') || lowerSym === 'arb') return '💙';
+  if (lowerName.includes('optimism') || lowerSym === 'op') return '🔴';
+  if (lowerName.includes('bsc') || lowerName.includes('bnb') || lowerSym === 'bnb') return '🟡';
+  if (lowerName.includes('avalanche') || lowerSym === 'avax') return '🔺';
+  if (lowerName.includes('tron') || lowerSym === 'trx') return '🔴';
+  if (lowerName.includes('ton')) return '💎';
+  if (lowerName.includes('xrp') || lowerName.includes('ripple')) return '⚫';
+  if (lowerName.includes('celo')) return '🟢';
+  if (lowerName.includes('berachain')) return '🐻';
+  if (lowerName.includes('zora')) return '🔮';
+  if (lowerName.includes('sei')) return '🔴';
+  if (lowerName.includes('sonic')) return '⚡';
+  if (lowerName.includes('ape')) return '🐵';
   return '🌐';
 }
 

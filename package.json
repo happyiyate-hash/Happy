@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
-    "prepare:brand": "node -e \"import('node:fs').then(f => { if (f.existsSync('scripts/prepare-brand-assets.mjs')) import('./scripts/prepare-brand-assets.mjs'); })\"",
+    "prepare:brand": "node scripts/prepare-brand-assets.mjs",
     "build": "npm run prepare:brand && npm run build:web && npm run build:server",
     "build:web": "vite build",
     "build:server": "esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
@@ -16,7 +16,7 @@
     "cap:sync": "cap sync",
     "cap:copy": "cap copy",
     "cap:open:android": "cap open android",
-    "cap:build": "npm run build && npm run assets:generate && cap sync android"
+    "cap:build": "npm run build && npm run assets:generate && cap sync android && node -e \"import('node:fs').then(f => { ['server.cjs','server.cjs.map'].forEach(x => { const p='android/app/src/main/assets/public/'+x; if (f.existsSync(p)) f.unlinkSync(p); }); })\""
   },
   "dependencies": {
     "@capacitor/android": "^8.5.0",
