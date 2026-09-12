@@ -17,34 +17,39 @@ const ERC20_ABI = [
 // Fallback public RPCs for common EVM chains
 const PUBLIC_BACKUP_RPCS: Record<string, string[]> = {
   "1": [
-    'https://cloudflare-eth.com',
-    'https://eth.llamarpc.com',
-    'https://rpc.ankr.com/eth',
     'https://ethereum-rpc.publicnode.com',
+    'https://rpc.ankr.com/eth',
+    'https://1rpc.io/eth',
+    'https://eth.drpc.org',
   ],
   "137": [
+    'https://polygon-bor-rpc.publicnode.com',
     'https://polygon-rpc.com',
-    'https://polygon.llamarpc.com',
     'https://rpc.ankr.com/polygon',
+    'https://1rpc.io/matic',
   ],
   "8453": [
     'https://mainnet.base.org',
-    'https://base.llamarpc.com',
+    'https://base-rpc.publicnode.com',
+    'https://1rpc.io/base',
   ],
   "42161": [
     'https://arb1.arbitrum.io/rpc',
-    'https://arbitrum.llamarpc.com',
+    'https://arbitrum-one-rpc.publicnode.com',
+    'https://1rpc.io/arb',
   ],
   "10": [
     'https://mainnet.optimism.io',
-    'https://optimism.llamarpc.com',
+    'https://optimism-rpc.publicnode.com',
   ],
   "56": [
     'https://bsc-dataseed.binance.org',
-    'https://binance.llamarpc.com',
+    'https://bsc-rpc.publicnode.com',
+    'https://1rpc.io/bnb',
   ],
   "43114": [
     'https://api.avax.network/ext/bc/C/rpc',
+    'https://avalanche-c-chain-rpc.publicnode.com',
   ],
   "59144": [
     'https://rpc.linea.build',
@@ -68,6 +73,15 @@ export async function fetchERC20MetadataFromBlockchain(
 
   const keys = customKeys || getStoredApiKeys();
   const normalizedKey = normalizeChainKey(chainId);
+  let staticNet: ethers.Network | undefined;
+  try {
+    const numId = Number(normalizedKey);
+    if (!isNaN(numId) && numId > 0) {
+      staticNet = ethers.Network.from(numId);
+    }
+  } catch {
+    // Keep undefined
+  }
 
   // 1. Resolved primary RPC URL (incorporating Infura/Alchemy API Key)
   const primaryRpc = getResolvedRpcUrl(normalizedKey, keys);
@@ -77,14 +91,14 @@ export async function fetchERC20MetadataFromBlockchain(
   for (const rpcUrl of rpcList) {
     try {
       console.log(`[Ethers.js] Connecting to EVM chain (${normalizedKey}) via RPC: ${rpcUrl}`);
-      const provider = new ethers.JsonRpcProvider(rpcUrl, undefined, {
-        staticNetwork: true,
+      const provider = new ethers.JsonRpcProvider(rpcUrl, staticNet, {
+        staticNetwork: staticNet ?? true,
       });
 
       const contract = new ethers.Contract(cleanAddress, ERC20_ABI, provider);
 
-      // Execute RPC calls in parallel with 5s timeout
-      const timeoutMs = 5000;
+      // Execute RPC calls in parallel with 3s timeout
+      const timeoutMs = 3000;
       const fetchWithTimeout = <T>(promise: Promise<T>): Promise<T> => {
         return Promise.race([
           promise,
@@ -142,7 +156,7 @@ export async function detectEVMChainForContractAddress(
   address: string
 ): Promise<{ chainId: string; dexChainId: string; name: string; symbol: string; logoUrl: string } | null> {
   const clean = address.trim();
-  if (!clean || clean.length < 10) return null;
+  if (!clean || clean.length < 1) return null;
 
   try {
     const response = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${clean}`);

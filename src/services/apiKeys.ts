@@ -7,6 +7,9 @@ const INFURA_STORAGE_KEY = 'web3_donations_infura_key';
 const ALCHEMY_STORAGE_KEY = 'web3_donations_alchemy_key';
 
 export function getStoredApiKeys(): ApiKeyConfig {
+  if (typeof window === 'undefined' || !window.localStorage) {
+    return { infuraKey: '', alchemyKey: '' };
+  }
   try {
     const infuraKey = localStorage.getItem(INFURA_STORAGE_KEY) || '';
     const alchemyKey = localStorage.getItem(ALCHEMY_STORAGE_KEY) || '';
@@ -18,6 +21,7 @@ export function getStoredApiKeys(): ApiKeyConfig {
 }
 
 export function saveApiKeys(keys: ApiKeyConfig): void {
+  if (typeof window === 'undefined' || !window.localStorage) return;
   try {
     localStorage.setItem(INFURA_STORAGE_KEY, keys.infuraKey.trim());
     localStorage.setItem(ALCHEMY_STORAGE_KEY, keys.alchemyKey.trim());
