@@ -846,9 +846,6 @@ export default function App() {
           const normKey = normalizeChainKey(lookup.chainId);
           if (normKey !== normalizeChainKey(selectedChain)) {
             setSelectedChain(normKey);
-            setAutoSwitchNotice(
-              `⚡ Auto-switched network to ${lookup.blockchain} where token is deployed!`
-            );
           }
         }
       } catch (e) {
@@ -937,9 +934,6 @@ export default function App() {
 
       if (activeChainKey !== normalizeChainKey(selectedChain) && SUPPORTED_CHAINS[activeChainKey]) {
         setSelectedChain(activeChainKey);
-        setAutoSwitchNotice(
-          `⚡ Auto-switched network to ${lookup?.blockchain || activeChainKey} where asset was identified!`
-        );
       }
 
       const validation = validateTokenIdentifier(activeChainKey, addr, blockchainType);
@@ -977,9 +971,6 @@ export default function App() {
             erc20Meta = testMeta;
             activeChainKey = testChain;
             setSelectedChain(testChain);
-            setAutoSwitchNotice(
-              `⚡ Auto-switched network to ${getChainInfo(testChain).name} where contract was verified on-chain!`
-            );
             break;
           }
         }
@@ -1726,14 +1717,6 @@ export default function App() {
                   >
                     Add Another Token
                   </button>
-                </div>
-              )}
-
-              {/* Auto Network Switch Toast */}
-              {autoSwitchNotice && (
-                <div className="bg-blue-500/15 border border-blue-500/40 rounded-xl p-2.5 text-blue-300 text-xs font-semibold flex items-center space-x-2 animate-in fade-in">
-                  <Zap className="w-4 h-4 text-blue-400 shrink-0 fill-blue-400/20" />
-                  <span>{autoSwitchNotice}</span>
                 </div>
               )}
 

@@ -2,6 +2,8 @@
  * Smart Auto-Paste & Contract Address Verification Service
  */
 
+import { Capacitor } from '@capacitor/core';
+import { Clipboard } from '@capacitor/clipboard';
 import { isXrplAddress, isTonAddress, isSolanaAddress, isTronAddress } from '../constants/chains';
 
 // Extract a valid crypto contract address or asset identifier from raw text or URLs
@@ -47,10 +49,10 @@ export function extractContractAddress(rawText: string): string | null {
     return xrplMatch[0];
   }
 
-  // 8. Broad fallback for clean single non-whitespace crypto token address string (20-90 chars)
+  // 8. Broad fallback for clean single non-whitespace crypto token address string (1-120 chars)
   if (
-    clean.length >= 20 &&
-    clean.length <= 90 &&
+    clean.length >= 1 &&
+    clean.length <= 120 &&
     !/\s/.test(clean) &&
     /^[A-Za-z0-9_\-\.:]+$/.test(clean)
   ) {
@@ -68,6 +70,23 @@ export interface SmartPasteResult {
 }
 
 /**
+ * Read clipboard through the native Capacitor Clipboard plugin in Android/iOS.
+ * Fall back to the browser clipboard API for the PWA/web version.
+ */
+async function readClipboardText(): Promise<string> {
+  if (Capacitor.isNativePlatform()) {
+    const { value } = await Clipboard.read();
+    return value || '';
+  }
+
+  if (typeof navigator !== 'undefined' && navigator.clipboard && typeof navigator.clipboard.readText === 'function') {
+    return await navigator.clipboard.readText();
+  }
+
+  throw new Error('Clipboard API unavailable');
+}
+
+/**
  * Core smart auto-paste function - operates completely silently without popup banners
  */
 export async function processClipboardAutoPaste(
@@ -77,11 +96,7 @@ export async function processClipboardAutoPaste(
   onFetchToken: (addr: string) => void
 ): Promise<SmartPasteResult> {
   try {
-    if (typeof navigator === 'undefined' || !navigator.clipboard || typeof navigator.clipboard.readText !== 'function') {
-      return { status: 'PERMISSION_DENIED' };
-    }
-
-    const clipText = await navigator.clipboard.readText();
+    const clipText = await readClipboardText();
     if (!clipText || !clipText.trim()) {
       return { status: 'CLIPBOARD_EMPTY' };
     }
@@ -97,11 +112,14 @@ export async function processClipboardAutoPaste(
     }
 
     const normValid = validAddress.toLowerCase();
-    const normLast = lastProcessedAddress ? lastProcessedAddress.toLowerCase() : '';
+    const normLast = lastProcessedAddress ? lastProcessedAddress.toLowerCase().trim() : '';
+    const normCurrent = currentAddressInput ? currentAddressInput.toLowerCase().trim() : '';
 
-    if (normValid === normLast) {
+    if (normValid === normLast || normValid === normCurrent) {
       // Same contract address already loaded/fetched -> Do NOT refetch!
-      setAddressInput(validAddress);
+      if (currentAddressInput !== validAddress) {
+        setAddressInput(validAddress);
+      }
       return {
         status: 'ALREADY_FETCHED',
         address: validAddress,

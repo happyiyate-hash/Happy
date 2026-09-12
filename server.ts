@@ -126,6 +126,67 @@ async function startServer() {
     }
   });
 
+  // Direct endpoint for single token submit (/submit and /api/submit)
+  app.post(['/submit', '/api/submit'], async (req, res) => {
+    try {
+      const payload = { action: 'submit', ...(req.body || {}) };
+      const response = await handleTokenRequest(payload);
+      return res.status(response.success ? 200 : 400).json(response);
+    } catch (err: any) {
+      console.error('[Token Backend submit] Error:', err);
+      return res.status(500).json({ success: false, error: err?.message || 'Failed to submit token' });
+    }
+  });
+
+  // Direct endpoint for verifyTokensBatch
+  app.post(['/verifyTokensBatch', '/api/verifyTokensBatch'], async (req, res) => {
+    try {
+      const payload = { action: 'verifyTokensBatch', ...(req.body || {}) };
+      const response = await handleTokenRequest(payload);
+      return res.status(200).json(response);
+    } catch (err: any) {
+      console.error('[Token Backend verifyTokensBatch] Error:', err);
+      return res.status(500).json({ success: false, error: err?.message || 'Failed to verify tokens batch' });
+    }
+  });
+
+  // Direct endpoint for batchSaveTokens
+  app.post(['/batchSaveTokens', '/api/batchSaveTokens'], async (req, res) => {
+    try {
+      const payload = { action: 'batchSaveTokens', ...(req.body || {}) };
+      const response = await handleTokenRequest(payload);
+      return res.status(response.success ? 200 : 400).json(response);
+    } catch (err: any) {
+      console.error('[Token Backend batchSaveTokens] Error:', err);
+      return res.status(500).json({ success: false, error: err?.message || 'Failed to batch save tokens' });
+    }
+  });
+
+  // Direct endpoint for getAllTokens
+  app.post(['/getAllTokens', '/api/getAllTokens'], async (req, res) => {
+    try {
+      const payload = { action: 'getAllTokens', ...(req.body || {}) };
+      const response = await handleTokenRequest(payload);
+      return res.status(200).json(response);
+    } catch (err: any) {
+      console.error('[Token Backend getAllTokens] Error:', err);
+      return res.status(500).json({ success: false, error: err?.message || 'Failed to get all tokens' });
+    }
+  });
+
+  // Direct endpoint for getTokensByUser
+  app.post(['/getTokensByUser', '/api/getTokensByUser'], async (req, res) => {
+    try {
+      const payload = { action: 'getTokensByUser', ...(req.body || {}) };
+      const response = await handleTokenRequest(payload);
+      return res.status(200).json(response);
+    } catch (err: any) {
+      console.error('[Token Backend getTokensByUser] Error:', err);
+      return res.status(500).json({ success: false, error: err?.message || 'Failed to get tokens by user' });
+    }
+  });
+
+
   app.post('/api/upload-token', async (req, res) => {
     try {
       const payload = { action: 'saveToken', ...(req.body || {}) };

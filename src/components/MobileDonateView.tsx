@@ -1,5 +1,21 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Search, X, Clipboard, Zap, ChevronDown, HeartHandshake, ShieldCheck, Sparkles, Layers, ArrowRight } from 'lucide-react';
+import {
+  Search,
+  X,
+  Clipboard,
+  Zap,
+  ChevronDown,
+  HeartHandshake,
+  ShieldCheck,
+  Sparkles,
+  Layers,
+  ArrowRight,
+  BookmarkPlus,
+  BookmarkCheck,
+  CheckCircle2,
+  AlertCircle,
+  ListOrdered,
+} from 'lucide-react';
 import { ChainId, SubmittedToken } from '../types';
 import { RAW_EVM_CHAINS, getChainInfo, normalizeChainKey } from '../constants/chains';
 import { LogoVerificationReport } from '../services/logoVerificationEngine';
@@ -12,6 +28,13 @@ import { ChainSelectorModal, getChainLogoUrl } from './ChainSelectorModal';
 import { TokenHuntCard } from './TokenHuntCard';
 import { LogoStatus } from '../types';
 import { useTranslation } from '../context/I18nContext';
+import { detectTokenBlockchain, chainIdToSelectorId, DetectedChain } from '../services/chainDetection';
+import {
+  addLocalSavedToken,
+  getLocalSavedTokens,
+  submittedTokenToSavedItem,
+  MAX_SAVED_TOKENS,
+} from '../services/tokenBatchVerificationService';
 
 interface MobileDonateViewProps {
   addressInput: string;
@@ -34,6 +57,8 @@ interface MobileDonateViewProps {
   isSavingToken: boolean;
   isVerifying?: boolean;
   verificationStage?: number;
+  userId?: string;
+  onOpenSavedTokens?: () => void;
 }
 
 export const MobileDonateView: React.FC<MobileDonateViewProps> = ({
@@ -57,10 +82,85 @@ export const MobileDonateView: React.FC<MobileDonateViewProps> = ({
   isSavingToken,
   isVerifying = false,
   verificationStage = 4,
+  userId,
+  onOpenSavedTokens,
 }) => {
   const { t } = useTranslation();
   const [isChainModalOpen, setIsChainModalOpen] = useState(false);
   const [imgError, setImgError] = useState(false);
+  const [savedTokensCount, setSavedTokensCount] = useState<number>(() => getLocalSavedTokens(userId).length);
+  const [saveStatusMessage, setSaveStatusMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [detectedChain, setDetectedChain] = useState<DetectedChain | null>(null);
+  const [, setLogoTick] = useState(0);
+
+  useEffect(() => {
+    const handleLogoTick = () => {
+      setImgError(false);
+      setLogoTick((prev) => prev + 1);
+    };
+    window.addEventListener('tokencare_chain_logo_updated', handleLogoTick);
+    window.addEventListener('tokencare_dynamic_chains_updated', handleLogoTick);
+    return () => {
+      window.removeEventListener('tokencare_chain_logo_updated', handleLogoTick);
+      window.removeEventListener('tokencare_dynamic_chains_updated', handleLogoTick);
+    };
+  }, []);
+
+  // Refresh saved tokens count
+  const refreshSavedCount = () => {
+    const list = getLocalSavedTokens(userId);
+    setSavedTokensCount(list.length);
+  };
+
+  useEffect(() => {
+    refreshSavedCount();
+
+    const handleUpdate = () => {
+      refreshSavedCount();
+    };
+
+    window.addEventListener('tokencare_saved_tokens_updated', handleUpdate);
+    window.addEventListener('storage', handleUpdate);
+
+    return () => {
+      window.removeEventListener('tokencare_saved_tokens_updated', handleUpdate);
+      window.removeEventListener('storage', handleUpdate);
+    };
+  }, [userId]);
+
+  const handleSaveTokenFromCard = async (settings: any) => {
+    if (!fetchedToken) return;
+
+    if (handleSaveToken) {
+      try {
+        await (handleSaveToken as any)(settings);
+        refreshSavedCount();
+        return;
+      } catch (err) {
+        console.warn('handleSaveToken error in MobileDonateView, falling back to local save:', err);
+      }
+    }
+
+    const tokenItem = submittedTokenToSavedItem(fetchedToken, selectedChain);
+    const res = addLocalSavedToken(tokenItem, userId);
+
+    if (res.success) {
+      setSavedTokensCount(res.list.length);
+      setSaveStatusMessage({
+        type: 'success',
+        text: `"${tokenItem.symbol || tokenItem.name}" saved to your list (${res.list.length}/${MAX_SAVED_TOKENS})!`,
+      });
+    } else {
+      setSaveStatusMessage({
+        type: 'error',
+        text: res.error || 'Token is already in your saved list.',
+      });
+    }
+
+    setTimeout(() => {
+      setSaveStatusMessage(null);
+    }, 4500);
+  };
 
   const lastProcessedRef = useRef<string | null>(
     fetchedToken?.address ? fetchedToken.address.toLowerCase() : null
@@ -73,6 +173,16 @@ export const MobileDonateView: React.FC<MobileDonateViewProps> = ({
     }
   }, [fetchedToken?.address, fetchedToken?.id]);
 
+  // Keep lastProcessedRef synchronized with addressInput
+  useEffect(() => {
+    if (addressInput && addressInput.trim()) {
+      const valid = extractContractAddress(addressInput.trim());
+      if (valid) {
+        lastProcessedRef.current = valid.toLowerCase();
+      }
+    }
+  }, [addressInput]);
+
   useEffect(() => {
     setImgError(false);
   }, [selectedChain]);
@@ -82,15 +192,42 @@ export const MobileDonateView: React.FC<MobileDonateViewProps> = ({
   const currentRawDef = RAW_EVM_CHAINS[normalizedKey] || RAW_EVM_CHAINS['137'];
   const currentLogoUrl = getChainLogoUrl(selectedChain);
 
+  // Process token address verification with proactive chain detection
+  const handleProcessToken = async (addrToProcess?: string) => {
+    const raw = (addrToProcess || addressInput).trim();
+    if (!raw) return;
+
+    // Detect blockchain silently without popup banners
+    try {
+      const detected = await detectTokenBlockchain(raw);
+      if (detected && !detected.isUnknown && detected.chainId && detected.chainId !== 'unknown') {
+        setDetectedChain(detected);
+        const selectorId = chainIdToSelectorId(detected.chainId) as ChainId;
+        if (String(selectorId) !== String(selectedChain)) {
+          setSelectedChain(selectorId);
+        }
+      }
+    } catch (err) {
+      console.warn('Chain auto-detection skipped:', err);
+    }
+
+    // Always fetch token directly without blocking or showing error banners
+    onFetchToken(raw);
+  };
+
   // Smart Auto-Paste Executor (Runs completely silently)
   const triggerAutoPaste = async () => {
+    // If token is already loaded, being saved, or currently verifying, do not interrupt
+    if (fetchedToken && fetchedToken.id !== 'token-pending') return;
+    if (isLoading || isVerifying || isSavingToken) return;
+
     await processClipboardAutoPaste(
       addressInput,
       lastProcessedRef.current,
       setAddressInput,
       (newAddr) => {
         lastProcessedRef.current = newAddr.toLowerCase();
-        onFetchToken(newAddr);
+        void handleProcessToken(newAddr);
       }
     );
   };
@@ -125,7 +262,7 @@ export const MobileDonateView: React.FC<MobileDonateViewProps> = ({
       setAddressInput,
       (newAddr) => {
         lastProcessedRef.current = newAddr.toLowerCase();
-        onFetchToken(newAddr);
+        void handleProcessToken(newAddr);
       }
     );
 
@@ -140,7 +277,7 @@ export const MobileDonateView: React.FC<MobileDonateViewProps> = ({
           } else {
             setAddressInput(valid);
             lastProcessedRef.current = norm;
-            onFetchToken(valid);
+            void handleProcessToken(valid);
           }
         } else {
           // Non-address rich text entered -> automatically clean it without saying anything!
@@ -173,9 +310,9 @@ export const MobileDonateView: React.FC<MobileDonateViewProps> = ({
               ) : (
                 <div
                   className="w-full h-full rounded-md flex items-center justify-center font-mono text-[9px] font-bold text-white"
-                  style={{ backgroundColor: currentRawDef?.themeColor || '#22C55E' }}
+                  style={{ backgroundColor: currentRawDef.themeColor }}
                 >
-                  {String(currentRawDef?.symbol || 'EVM').slice(0, 3)}
+                  {currentRawDef.symbol.slice(0, 3)}
                 </div>
               )}
             </div>
@@ -204,7 +341,7 @@ export const MobileDonateView: React.FC<MobileDonateViewProps> = ({
               className="w-full bg-transparent text-white font-mono text-[11px] focus:outline-none placeholder:text-zinc-600 truncate"
               onKeyDown={(e) => {
                 if (e.key === 'Enter') {
-                  onFetchToken();
+                  void handleProcessToken();
                 }
               }}
             />
@@ -224,7 +361,7 @@ export const MobileDonateView: React.FC<MobileDonateViewProps> = ({
           {/* Right: Verify Action Button */}
           <button
             type="button"
-            onClick={() => onFetchToken()}
+            onClick={() => void handleProcessToken()}
             disabled={isLoading || !addressInput.trim()}
             className="px-3 py-1.5 bg-[#22C55E] hover:bg-[#16A34A] disabled:opacity-40 text-black font-black text-xs rounded-xl shadow-[0_2px_12px_rgba(34,197,94,0.4)] transition-all cursor-pointer disabled:cursor-not-allowed flex items-center space-x-1 shrink-0 h-10"
           >
@@ -256,10 +393,66 @@ export const MobileDonateView: React.FC<MobileDonateViewProps> = ({
               <h2 className="text-xs font-bold text-white mt-0.5">{t('mobileDonate.verifyAndConfigure', 'Verify & Configure Donation Campaigns')}</h2>
             </div>
           </div>
-          <span className="text-[9px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded-full font-mono font-bold">
-            {currentChainInfo.name}
-          </span>
+          
+          <div className="flex items-center space-x-1.5">
+            <span className="text-[10.5px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/25 px-2.5 py-1 rounded-xl font-mono font-bold shrink-0">
+              {currentChainInfo.name}
+            </span>
+          </div>
         </div>
+
+        {/* Error Message Notice */}
+        {errorMessage && (
+          <div className="bg-rose-950/60 border border-rose-500/40 text-rose-300 rounded-xl px-3 py-2 text-xs flex items-center gap-2 shadow-sm animate-in fade-in">
+            <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+            <span className="font-semibold text-[11px] leading-tight">{errorMessage}</span>
+          </div>
+        )}
+
+        {/* Save Status Alert / Toast */}
+        {saveStatusMessage && (
+          <div
+            className={`p-3 rounded-xl border flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs animate-in fade-in duration-200 shadow-md ${
+              saveStatusMessage.type === 'success'
+                ? 'bg-emerald-950/60 border-emerald-500/40 text-emerald-300'
+                : 'bg-rose-950/60 border-rose-500/40 text-rose-300'
+            }`}
+          >
+            <div className="flex items-center space-x-2">
+              {saveStatusMessage.type === 'success' ? (
+                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+              ) : (
+                <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+              )}
+              <span className="font-semibold text-[11.5px] leading-tight">{saveStatusMessage.text}</span>
+            </div>
+
+            {saveStatusMessage.type === 'success' && (
+              <div className="flex items-center space-x-2 shrink-0 pt-1 sm:pt-0">
+                {onOpenSavedTokens && (
+                  <button
+                    type="button"
+                    onClick={onOpenSavedTokens}
+                    className="px-2.5 py-1 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 rounded-lg text-[10px] font-bold transition-colors cursor-pointer"
+                  >
+                    View List ({savedTokensCount}/{MAX_SAVED_TOKENS})
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAddressInput('');
+                    setFetchedToken(null);
+                    setSaveStatusMessage(null);
+                  }}
+                  className="px-2.5 py-1 bg-zinc-900 hover:bg-zinc-800 text-zinc-200 border border-zinc-700 rounded-lg text-[10px] font-bold transition-colors cursor-pointer"
+                >
+                  + Add Next Token
+                </button>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* 3. Stacked Cards for Real Fetched Token or Empty Search State */}
         {fetchedToken ? (
@@ -319,10 +512,7 @@ export const MobileDonateView: React.FC<MobileDonateViewProps> = ({
               logoReport={logoReport}
               logoStatus={logoStatus}
               trustScore={fetchedToken.verificationReport?.trustScore ?? fetchedToken.safety?.score}
-              isAlreadySaved={tokens.some(
-                (t) => t.address.toLowerCase().trim() === fetchedToken.address.toLowerCase().trim()
-              )}
-              onSaveToken={handleSaveToken}
+              onSaveToken={handleSaveTokenFromCard}
               onCancel={handleResetForm}
               isSaving={isSavingToken}
               isVerifying={isLoading || isVerifying}
@@ -372,6 +562,7 @@ export const MobileDonateView: React.FC<MobileDonateViewProps> = ({
         isOpen={isChainModalOpen}
         onClose={() => setIsChainModalOpen(false)}
         selectedChain={selectedChain}
+        detectedChain={detectedChain}
         onSelectChain={(chain) => {
           setSelectedChain(chain);
           setIsChainModalOpen(false);

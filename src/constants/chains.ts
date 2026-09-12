@@ -1172,31 +1172,10 @@ export function getResolvedRpcUrl(chainKey: string, apiKeys: ApiKeyConfig): stri
 }
 
 /**
- * Determines whether an EVM chain is enabled based on user's API keys
+ * Determines whether an EVM chain is enabled based on user's API keys.
+ * All supported blockchains are enabled and accessible.
  */
-export function isChainEnabledByKeys(chainKey: string, apiKeys: ApiKeyConfig): boolean {
-  const normalized = normalizeChainKey(chainKey);
-  const def = RAW_EVM_CHAINS[normalized];
-  if (!def) return false;
-
-  const hasInfura = apiKeys.infuraKey.trim().length > 0;
-  const hasAlchemy = apiKeys.alchemyKey.trim().length > 0;
-
-  // If user hasn't added any keys yet, all chains remain accessible in public/preview mode!
-  if (!hasInfura && !hasAlchemy) {
-    return true;
-  }
-
-  // If user submitted Infura key, enable Infura chains
-  if (def.provider === 'infura') {
-    return hasInfura;
-  }
-
-  // If user submitted Alchemy key, enable Alchemy chains
-  if (def.provider === 'alchemy') {
-    return hasAlchemy;
-  }
-
+export function isChainEnabledByKeys(_chainKey: string, _apiKeys: ApiKeyConfig): boolean {
   return true;
 }
 

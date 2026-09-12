@@ -317,6 +317,12 @@ export function submittedTokenToSavedItem(token: SubmittedToken, selectedChain: 
  */
 export const SUPABASE_EDGE_FUNCTION_URL = 'https://pqqomaveycjeorgurpev.supabase.co/functions/v1/save-token-batch';
 
+import {
+  verifyTokensBatch as verifyWithWorker,
+  batchSaveTokens as saveBatchWithWorker,
+  WORKER_URL,
+} from './localBackendService';
+
 export async function verifyTokensBatch(
   tokensToVerify: Array<{ blockchain: string; contractAddress: string }>
 ): Promise<VerifyTokensBatchResponse> {
@@ -330,6 +336,28 @@ export async function verifyTokensBatch(
     };
   }
 
+  // 1. Primary: Direct high-speed verification via Cloudflare Worker API
+  try {
+    const workerRes = await verifyWithWorker(
+      tokensToVerify.map((t) => ({
+        blockchain: (t.blockchain || 'ethereum').toLowerCase(),
+        contractAddress: (t.contractAddress || '').trim(),
+      }))
+    );
+
+    if (workerRes && (workerRes.success || workerRes.results?.length > 0)) {
+      return {
+        success: true,
+        total: workerRes.total,
+        existed: workerRes.existed,
+        notExisted: workerRes.notExisted,
+        results: workerRes.results,
+      };
+    }
+  } catch (workerErr) {
+    console.debug('[SavedTokensService] Worker verifyTokensBatch note:', workerErr);
+  }
+
   const payload: VerifyTokensBatchRequest = {
     action: 'verifyTokensBatch',
     tokens: tokensToVerify.map((t) => ({
@@ -339,8 +367,9 @@ export async function verifyTokensBatch(
   };
 
   const tryEndpoints = [
-    SUPABASE_EDGE_FUNCTION_URL,
     '/api/token',
+    WORKER_URL,
+    SUPABASE_EDGE_FUNCTION_URL,
     '/api/save-token',
   ];
 
@@ -398,21 +427,9 @@ export async function verifyTokensBatch(
 }
 
 /**
- * Call batchSaveTokens on Edge Function / Gateway
- * Request body matches exact blueprint:
- * {
- *   "action": "batchSaveTokens",
- *   "userId": "USER_UUID",
- *   "tokens": [
- *     {
- *       "name": "Token A",
- *       "symbol": "TKA",
- *       "contractAddress": "0x...",
- *       "blockchain": "ethereum",
- *       "logoUrl": "https://..."
- *     }
- *   ]
- * }
+ * Call batchSaveTokens on Local Backend / Worker Gateway
+ * Performs verification, saves valid tokens, credits 15 TC per token,
+ * and creates batch notifications.
  */
 export async function batchSaveTokensToBackend(
   userId: string,
@@ -424,13 +441,49 @@ export async function batchSaveTokensToBackend(
     logoUrl?: string;
     chainId?: number | string;
   }>
-): Promise<{ success: boolean; message?: string; error?: string; saved?: any[]; rejected?: any[]; responseData?: any }> {
+): Promise<{ success: boolean; message?: string; error?: string; saved?: any[]; rejected?: any[]; responseData?: any; rewardEarnedTC?: number }> {
   if (!tokens || tokens.length === 0) {
     return { success: false, error: 'No tokens provided for batch save.' };
   }
 
   if (tokens.length > MAX_SAVED_TOKENS) {
     return { success: false, error: `Batch save limit is ${MAX_SAVED_TOKENS} tokens maximum.` };
+  }
+
+  // 1. Primary: Use localBackendService (Cloudflare Worker + TC reward calculation + notification)
+  try {
+    const localRes = await saveBatchWithWorker(
+      userId || 'anonymous_user',
+      tokens.map((t) => ({
+        name: t.name || 'Token',
+        symbol: (t.symbol || 'TOK').toUpperCase(),
+        contractAddress: t.contractAddress.trim(),
+        blockchain: (t.blockchain || 'ethereum').toLowerCase(),
+        logoUrl: t.logoUrl || '',
+      }))
+    );
+
+    if (localRes.success) {
+      return {
+        success: true,
+        message: localRes.message || `Successfully registered ${localRes.saved} token(s). Earned ${localRes.rewardEarnedTC || 0} TC!`,
+        saved: localRes.saved ? tokens.slice(0, localRes.saved) : tokens,
+        rejected: localRes.existed ? tokens.slice(localRes.saved) : [],
+        rewardEarnedTC: localRes.rewardEarnedTC,
+        responseData: localRes,
+      };
+    } else if (localRes.error?.includes('already exist')) {
+      return {
+        success: false,
+        error: localRes.error,
+        message: localRes.message,
+        saved: [],
+        rejected: tokens,
+        responseData: localRes,
+      };
+    }
+  } catch (workerErr) {
+    console.debug('[SavedTokensService] Worker batchSaveTokens note:', workerErr);
   }
 
   const payload: BatchSaveTokensRequest = {
@@ -449,6 +502,7 @@ export async function batchSaveTokensToBackend(
       return cleanToken;
     }),
   };
+
 
   // Obtain bearer auth token from active Supabase session if available
   let authBearer = '';
